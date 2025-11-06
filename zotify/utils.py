@@ -30,7 +30,7 @@ def create_download_directory(dir_path: str | PurePath) -> None:
             pass
 
 
-# ----------------------------------------------------------------- EMILIO
+# ----------------------------------------------------------------- The-Rinzler
 def fix_filename(name: str | PurePath | Path):
     """
     Replace invalid characters on Linux/Windows/MacOS with underscores.
@@ -60,7 +60,7 @@ def fix_filename(name: str | PurePath | Path):
         name = name[:maxlen]
 
     return name
-# ----------------------------------------------------------------- EMILIO
+# ----------------------------------------------------------------- The-Rinzler
 
 
 def fill_output_template(output_template: str, track_metadata: dict, extra_keys: dict) -> tuple[str, str]:
