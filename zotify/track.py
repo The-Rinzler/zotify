@@ -230,7 +230,8 @@ def download_track(mode: str, track_id: str, extra_keys: dict | None = None, pba
             
             track_path = PurePath(Zotify.CONFIG.get_root_path()).joinpath(root_to_track)
             filedir = PurePath(track_path).parent
-            
+
+
             track_path_temp = track_path
             if Zotify.CONFIG.get_temp_download_dir() != '':
                 track_path_temp = PurePath(Zotify.CONFIG.get_temp_download_dir()).joinpath(f'zotify_{str(uuid.uuid4())}_{track_id}.{track_path.suffix}')
@@ -242,7 +243,19 @@ def download_track(mode: str, track_id: str, extra_keys: dict | None = None, pba
                          f"File Already Exists: {track_path_exists}\n" +\
                          f"song_id in Local Archive: {in_dir_songids}\n" +\
                          f"song_id in Global Archive: {in_global_songids}")
-            
+
+            # ----------------------------------------------------------------- The-Rinzler
+            # Fix redonwloading songs that have updated .song_ids.
+            if track_path_exists and not in_dir_songids and not Zotify.CONFIG.get_disable_directory_archives():
+                add_to_directory_song_archive(
+                    track_path,  # writes to <dir>/.song_ids
+                    track_metadata[ID],
+                    track_metadata[ARTISTS][0],
+                    track_name
+                )
+                in_dir_songids = True
+            # ----------------------------------------------------------------- The-Rinzler
+
             # same track_path, not same song_id, rename the newcomer
             if track_path_exists and not in_dir_songids and not Zotify.CONFIG.get_disable_directory_archives():
                 c = len([file for file in Path(filedir).iterdir() if file.match(track_path.stem + "*")])

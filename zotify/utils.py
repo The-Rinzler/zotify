@@ -30,7 +30,8 @@ def create_download_directory(dir_path: str | PurePath) -> None:
             pass
 
 
-def fix_filename(name: str | PurePath | Path ):
+# ----------------------------------------------------------------- EMILIO
+def fix_filename(name: str | PurePath | Path):
     """
     Replace invalid characters on Linux/Windows/MacOS with underscores.
     list from https://stackoverflow.com/a/31976060/819417
@@ -46,13 +47,20 @@ def fix_filename(name: str | PurePath | Path ):
     >>> all('_' == fix_filename(chr(i)) for i in list(range(32)))
     True
     """
-    name = re.sub(r'[/\\:|<>"?*\0-\x1f]|^(AUX|COM[1-9]|CON|LPT[1-9]|NUL|PRN)(?![^.])|^\s|[\s.]$', "_", str(name), flags=re.IGNORECASE)
-    
+    # Maximize character compatibility with Macos, Music.app and iPods.
+    name = re.sub(
+        r'[\/#:|_<>\0-\x1f?!]|^(AUX|COM[1-9]|CON|LPT[1-9]|NUL|PRN)(?![^.])',
+        "_",
+        str(name),
+        flags=re.IGNORECASE
+    )
+
     maxlen = Zotify.CONFIG.get_max_filename_length()
     if maxlen and len(name) > maxlen:
         name = name[:maxlen]
-    
+
     return name
+# ----------------------------------------------------------------- EMILIO
 
 
 def fill_output_template(output_template: str, track_metadata: dict, extra_keys: dict) -> tuple[str, str]:
