@@ -16,4 +16,4 @@ Use the patched fork instead (required by my Zotify fork):
 
 ```bash
 # inside your Zotify venv
-python -m pip install "librespot @ git+https://github.com/kokarare1212/librespot-python.git"
+python -m pip install "librespot @ git+https://github.com/Googolplexed0/librespot-python.git@proto-ext-metadata"
