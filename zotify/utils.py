@@ -39,12 +39,17 @@ def fix_filename(name: str | PurePath | Path ) -> str:
     >>> all('_' == fix_filename(chr(i)) for i in list(range(32)))
     True
     """
-    name = re.sub(r'[/\\:|<>"?*\0-\x1f]|^(AUX|COM[1-9]|CON|LPT[1-9]|NUL|PRN)(?![^.])|^\s|[\s.]$', "_", str(name), flags=re.IGNORECASE)
-    
+    name = re.sub(
+        r'[\/#:|_<>\0-\x1f?!]|^(AUX|COM[1-9]|CON|LPT[1-9]|NUL|PRN)(?![^.])',
+        "_",
+        str(name),
+        flags=re.IGNORECASE
+    )
+
     maxlen = Zotify.CONFIG.get_max_filename_length()
     if maxlen and len(name) > maxlen:
         name = name[:maxlen]
-    
+
     return name
 
 
@@ -275,35 +280,79 @@ def wait_between_downloads(skip_wait: bool = False) -> None:
 
 # Song Archive Utils
 def upgrade_legacy_archive(entries: list[str], archive_path: PurePath) -> None:
-    """ Attempt to match a legacy archive's filename to a full filepath """
-    
+    """Attempt to match a legacy archive's filename to a full filepath"""
+
+    # Safety: Skip if file is corrupted (no tabs found)
+    if not entries or '\t' not in entries[0]:
+        Printer.logger("Archive file corrupted or empty. Skipping upgrade.", PrintChannel.DEBUG)
+        return
+
     rewrite_legacy = False
     from zotify.api import Track
-    for i, entry in enumerate(entries):
-        entry_items = entry.strip().split('\t')
-        filename_or_path = PurePath(entry_items[-1])
-        if filename_or_path.is_absolute():
-            entries[i] = entry_items
+    upgraded_entries = []
+
+    for entry in entries:
+        entry_str = entry.strip()
+        if not entry_str:
             continue
-        
+
+        entry_items = entry_str.split('\t')
+
+        # Must have at least 5 fields: id, timestamp, artist, title, path
+        if len(entry_items) < 5:
+            upgraded_entries.append(entry_str)  # Keep unchanged
+            continue
+
+        filename_or_path = PurePath(entry_items[-1])
+
+        # Already absolute path, no upgrade needed
+        if filename_or_path.is_absolute():
+            upgraded_entries.append(entry_str)
+            continue
+
         rewrite_legacy = True
         path_entry = filename_or_path
-        for glob_path in Path(Zotify.CONFIG.get_root_path()).glob('**/' + str(filename_or_path)):
-            reliable_tags, unreliable_tags = Track.read_audio_tags(PurePath(glob_path))
-            if ("trackid" in unreliable_tags and unreliable_tags["trackid"] == entry_items[0]
-            or  unconv_artist_format(reliable_tags[0])[0] == entry_items[2]
-            or  reliable_tags[2] == entry_items[3]):
-                path_entry = PurePath(glob_path)
-                break
-        
-        entries[i] = entry_items[:-1] + [path_entry]
-    
+
+        # Try to find the file in the directory tree
+        try:
+            target_filename = filename_or_path.name
+            root_path = Path(Zotify.CONFIG.get_root_path())
+
+            for file_path in root_path.rglob('*'):
+                if not file_path.is_file():
+                    continue
+
+                if file_path.name == target_filename:
+                    try:
+                        # Verify by audio tags
+                        reliable_tags, unreliable_tags = Track.read_audio_tags(PurePath(file_path))
+
+                        if TRACKID in unreliable_tags and unreliable_tags[TRACKID] == entry_items[0]:
+                            path_entry = PurePath(file_path)
+                            break
+                        elif (unconv_artist_format(reliable_tags[0]) == entry_items[2] and
+                              reliable_tags[2] == entry_items[3]):
+                            path_entry = PurePath(file_path)
+                            break
+                    except:
+                        path_entry = PurePath(file_path)
+                        break
+        except Exception as e:
+            Printer.logger(
+                f"Warning: Could not upgrade legacy archive entry '{entry_items[-1]}': {str(e)}",
+                PrintChannel.DEBUG
+            )
+
+        # Reconstruct the entry string with proper tabs
+        upgraded_entry = f"{entry_items[0]}\t{entry_items[1]}\t{entry_items[2]}\t{entry_items[3]}\t{str(path_entry)}"
+        upgraded_entries.append(upgraded_entry)
+
     if rewrite_legacy:
         Path(archive_path).unlink()
-        mode = 'w'
-        for entry in entries:
-            add_to_archive(*entry, archive_path, mode)
-            mode = 'a'
+        with open(archive_path, 'w', encoding='utf-8') as f:
+            for entry_str in upgraded_entries:
+                f.write(entry_str + '\n')
+        Printer.logger(f"Upgraded archive: {archive_path}", PrintChannel.DEBUG)
 
 
 def get_archived_entries(dir_path: PurePath | None = None) -> list[str]:
@@ -314,20 +363,20 @@ def get_archived_entries(dir_path: PurePath | None = None) -> list[str]:
     else:
         disabled = Zotify.CONFIG.get_disable_song_archive()
         archive_path = Zotify.CONFIG.get_song_archive_location()
-    
+
     if disabled or not Path(archive_path).exists():
         return []
-    
+
     with open(archive_path, 'r', encoding='utf-8') as f:
         # id, date, author, track, filepath (only filename if from legacy archive)
         entries = f.readlines()
-    
+
     if dir_path or not Zotify.CONFIG.get_upgrade_legacy_archive():
         return entries
-    
+
     upgrade_legacy_archive(entries, archive_path)
     Zotify.CONFIG.set_stop_upgrade_legacy_archive()
-    
+
     return get_archived_entries(dir_path)
 
 
@@ -339,16 +388,17 @@ def get_archived_item_ids(dir_path: PurePath | None = None) -> list[str]:
 
 
 def get_archived_item_paths(dir_path: PurePath | None = None) -> list[PurePath]:
-    """ Returns list of downloaded item_paths """
+    """ Returns list of downloaded item_paths as just filenames for path comparison """
     entries = get_archived_entries(dir_path)
-    item_paths = [PurePath(entry.strip().split('\t')[-1]) for entry in entries]
+    # Extract just the filename from the stored path (works for legacy and full paths)
+    item_paths = [PurePath(entry.strip().split('\t')[-1]).name for entry in entries]
     return item_paths
 
 
-def add_to_archive(item_id: str, timestamp: str, author_name: str, item_name: str, item_path: PurePath, 
+def add_to_archive(item_id: str, timestamp: str, author_name: str, item_name: str, item_path: PurePath,
                    archive_path: PurePath, mode: str) -> None:
     """ Adds item record to the song archive at archive_path """
-    
+
     if not timestamp:
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with open(archive_path, mode, encoding='utf-8') as file:

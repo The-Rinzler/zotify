@@ -343,12 +343,16 @@ class DLContent(Content):
                     break
         
         in_dir_archive = self.id in get_archived_item_ids(path.parent)
+
         if not Zotify.CONFIG.get_optimized_dl():
+            archived_ids = get_archived_item_ids(path.parent)
             Printer.debug("Duplicate Check\n" +
-                        f"File Already Exists: {path_exists}\n" +
-                        f"id in Local Archive: {in_dir_archive}\n" +
-                        f"id in Global Archive: {self.in_global_archive}")
-        
+                          f"File Already Exists: {path_exists}\n" +
+                          f"id in Local Archive: {in_dir_archive}\n" +
+                          f"id in Global Archive: {self.in_global_archive}\n" +
+                          f"Archived IDs in {path.parent}: {archived_ids[:5]}...\n" +  # NEW
+                          f"Looking for ID: {self.id}")  # NEW
+
         if path_exists and Zotify.CONFIG.get_skip_existing() and Zotify.CONFIG.get_disable_directory_archives():
             Printer.hashtaged(PrintChannel.SKIPPING, f'"{self.rel_path(path)}" (FILE ALREADY EXISTS)')
             self.mark_downloaded(parent_stack, path)
@@ -718,7 +722,35 @@ class Track(DLContent):
             file_tags.set_raw("mp3", "TRCK", str(self.track_number))
         
         file_tags.save()
-        
+        # CRITICAL: Verify tags persisted to disk before continuing
+        # Prevents duplicate downloads due to unreadable/unflushed tags
+        try:
+            verify = music_tag.load_file(filepath)
+            # Check for custom TRACKID tag based on file format
+            verified_id = None
+            if self._ext == "mp3":
+                tag_dict = dict(verify.mfile.tags) if verify.mfile.tags else {}
+                txxx_key = MP3_CUSTOM_TAG_PREFIX + TRACKID.upper()
+                if txxx_key in tag_dict:
+                    verified_id = tag_dict[txxx_key].text[0] if tag_dict[txxx_key].text else None
+            elif self._ext == "m4a":
+                tag_dict = dict(verify.mfile.tags) if verify.mfile.tags else {}
+                m4a_key = M4A_CUSTOM_TAG_PREFIX + TRACKID
+                if m4a_key in tag_dict:
+                    verified_id = tag_dict[m4a_key][0].decode() if tag_dict[m4a_key] else None
+            else:
+                # OGG/FLAC - direct tag access
+                verified_id = verify[TRACKID].val if TRACKID in verify.tag_map else None
+
+            if not verified_id or verified_id != self.id:
+                Printer.hashtaged(PrintChannel.WARNING,
+                                  f'TAG VERIFICATION FAILED FOR "{self.rel_path(filepath)}"\n' +
+                                  f'Expected ID: {self.id} | Found: {verified_id}\n' +
+                                  'File may be re-downloaded on next run')
+        except Exception as e:
+            Printer.hashtaged(PrintChannel.WARNING,
+                              f'COULD NOT VERIFY TAGS FOR "{self.rel_path(filepath)}": {str(e)}')
+
         # save trach image art to file
         if not Zotify.CONFIG.get_album_art_jpg_file() or img is None:
             return
@@ -726,7 +758,7 @@ class Track(DLContent):
         if not Path(jpg_path).exists():
             with open(jpg_path, 'wb') as jpg_file:
                 jpg_file.write(img)
-    
+
     def download(self, parent_stack: ParentStack) -> None:
         if not Zotify.CONFIG.get_optimized_dl():
             if Zotify.CONFIG.get_download_parent_album():
@@ -734,64 +766,80 @@ class Track(DLContent):
                     self.album.download(ParentStack([parent_stack[0], self.album]))
                 return
             elif self.downloaded and self.clone_file(parent_stack):
-                Printer.hashtaged(PrintChannel.SKIPPING, f'"{self}" ({self.clsn.upper()} ALREADY DOWNLOADED THIS SESSION)\n' + 
-                                                         f'FILE COPIED TO NEW DESTINATION "{self.rel_path(parent_stack)}"')
+                Printer.hashtaged(PrintChannel.SKIPPING,
+                                  f'"{self}" ({self.clsn.upper()} ALREADY DOWNLOADED THIS SESSION)\n' +
+                                  f'FILE COPIED TO NEW DESTINATION "{self.rel_path(parent_stack)}"')
                 return
         elif Zotify.CONFIG.get_optimized_dl() and self.downloaded:
             if self.clone_to_all(): return
-        
+
         if Zotify.CONFIG.get_always_check_lyrics():
             self.fetch_lyrics(parent_stack)
-        
+
         if parent_stack.check_skippable():
             return
-        
+
         Interface.bind(parent_stack)
         with self.set_dl_status("Preparing Download"):
             path = check_path_dupes(self.fill_output_template(parent_stack))
-            if path != self.fill_output_template(parent_stack): # path exists but id isn't archived OR skipping disabled
+
+            # DEBUG: Show why skipping isn't working
+            Printer.debug(f"=== DUPLICATE DEBUG ===\n" +
+                          f"Track ID: {self.id}\n" +
+                          f"Track: {self}\n" +
+                          f"Path: {path}\n" +
+                          f"Template path: {self.fill_output_template(parent_stack)}\n" +
+                          f"Path exists on disk: {Path(path).is_file()}\n" +
+                          f"Config skip_existing: {Zotify.CONFIG.get_skip_existing()}\n" +
+                          f"Config disable_dir_archives: {Zotify.CONFIG.get_disable_directory_archives()}\n" +
+                          f"ID in dir archive: {self.id in get_archived_item_ids(path.parent)}\n" +
+                          f"ID in global archive: {self.in_global_archive}\n" +
+                          f"Dir archive IDs: {get_archived_item_ids(path.parent)[:3]}...")
+
+            if path != self.fill_output_template(
+                    parent_stack):  # path exists but id isn't archived OR skipping disabled
                 Printer.debug('Path Duplicate Not Being Skipped:\n' +
                               'ID not Archived' if Zotify.CONFIG.get_skip_existing() else 'Skipping Disabled')
             temppath = path.with_suffix(".tmp")
             if Zotify.CONFIG.get_temp_download_dir():
                 temppath = Zotify.CONFIG.get_temp_download_dir() / f'zotify_{str(uuid.uuid4())}_{self.id}.tmp'
-        
+
         stream = Zotify.get_content_stream(self)
         if stream is None:
             Printer.hashtaged(PrintChannel.ERROR, 'SKIPPING TRACK - FAILED TO GET CONTENT STREAM\n' +
-                                                 f'Track_ID: {self.id}')
+                              f'Track_ID: {self.id}')
             return
-        
+
         self.set_dl_status("Downloading Stream")
         time_elapsed_dl = self.fetch_content_stream(stream, temppath, parent_stack)
-        
+
         if not Zotify.CONFIG.get_always_check_lyrics():
             self.fetch_lyrics(parent_stack)
-        
+
         with self.set_dl_status("Converting File"):
             create_download_directory(path.parent)
-            time_elapsed_ffmpeg = self.convert_audio_format(temppath, path) # temppath -> path here
+            time_elapsed_ffmpeg = self.convert_audio_format(temppath, path)  # temppath -> path here
             if time_elapsed_ffmpeg is None:
                 path = pathlike_move_safe(temppath, path.with_suffix(".ogg"))
             self.mark_downloaded(parent_stack, path)
-        
+
         try:
             self.write_audio_tags(path)
         except Exception as e:
             Printer.hashtaged(PrintChannel.ERROR, 'FAILED TO WRITE METADATA\n' +
-                                                  'Ensure FFMPEG is installed and added to your PATH')
+                              'Ensure FFMPEG is installed and added to your PATH')
             Printer.traceback(e)
-        
+
         Printer.dl_complete(self, path, time_elapsed_dl, time_elapsed_ffmpeg)
         if not Zotify.CONFIG.get_bypass_metadata():
             if not self.in_dir_archive:
                 add_obj_to_song_archive(self, path, path.parent)
             if not self.in_global_archive:
                 add_obj_to_song_archive(self, path)
-        
+
         if Zotify.CONFIG.get_optimized_dl(): self.clone_to_all()
         wait_between_downloads()
-    
+
     @staticmethod
     def read_audio_tags(filepath: PurePath) -> tuple[tuple, dict]:
         tags = music_tag.load_file(filepath)
