@@ -105,10 +105,9 @@ class Content(HierarchicalNode):
     
     @staticmethod
     def fix_filename(filename: str) -> str:
-        # Replace invalid characters on Linux/Windows/MacOS with underscores
-        # Trailing spaces & periods are ignored on Windows
-        # see https://stackoverflow.com/a/31976060/819417
-        filename = re.sub(r'[/\\:|<>"?*\0-\x1f]|^(AUX|COM[1-9]|CON|LPT[1-9]|NUL|PRN)(?![^.])|^\s|[\s.]$', "_", str(filename), flags=re.IGNORECASE)
+        # Persisted Music.app/iPod contract, byte-exact with the legacy fork
+        # and the manager. Quotes, asterisks, backslashes and whitespace stay.
+        filename = re.sub(r'[\/#:|<>!?\0-\x1f]|^(AUX|COM[1-9]|CON|LPT[1-9]|NUL|PRN)(?![^.])', "_", str(filename), flags=re.IGNORECASE)
         maxlen = Zotify.CONFIG.get_max_filename_length()
         if maxlen and len(filename) > maxlen:
             filename = filename[:maxlen]
@@ -271,9 +270,10 @@ class Content(HierarchicalNode):
             parent_stack = ps if Zotify.CONFIG.get_optimized_dl() else ParentStack(ps.copy())
             self._real_filepaths[parent_stack] = path
             from zotify.metadata import SongArchive
-            if not SongArchive().obj_in_archive(self):
+            required_suffix = f'.{self._ext}' if isinstance(self, Track) else None
+            if not SongArchive().obj_in_archive(self, required_suffix=required_suffix):
                 SongArchive().add_obj(self, path)
-            if isinstance(self, Track) and not SongArchive(path.parent).obj_in_archive(self):
+            if isinstance(self, Track) and not SongArchive(path.parent).obj_in_archive(self, required_suffix=required_suffix):
                 SongArchive(path.parent).add_obj(self, path)
 
 
@@ -343,8 +343,9 @@ class DLContent(Content):
                 if file_match.stat().st_size:
                     path_exists = True
                     break
-        in_dir_archive = SongArchive(path.parent).obj_in_archive(self)
-        in_global_archive = SongArchive().obj_in_archive(self)
+        required_suffix = f'.{self._ext}' if isinstance(self, Track) else None
+        in_dir_archive = SongArchive(path.parent).obj_in_archive(self, required_suffix=required_suffix)
+        in_global_archive = SongArchive().obj_in_archive(self, required_suffix=required_suffix)
         if not Zotify.CONFIG.get_optimized_dl():
             Printer.debug(f'Duplicate Check @ "{path}"\n' +
                           f'File Already Exists: {path_exists}\n' +
@@ -358,7 +359,8 @@ class DLContent(Content):
         elif in_dir_archive and Zotify.CONFIG.get_skip_existing() and not Zotify.CONFIG.get_no_dir_archives():
             handle_archive(in_dir_archive)
             return True
-        elif in_global_archive and Zotify.CONFIG.get_skip_previously_downloaded():
+        elif (in_global_archive and Zotify.CONFIG.get_skip_previously_downloaded()
+              and not (isinstance(self, Track) and any(isinstance(p, Playlist) for p in parent_stack))):
             handle_archive(in_global_archive)
             return True
         
@@ -475,15 +477,19 @@ class DLContent(Content):
     def download(self, parent_stack: ParentStack):
         pass
     
-    def clone_file(self, parent_stack: ParentStack) -> bool:
+    def clone_file(self, parent_stack: ParentStack, source_path: PurePath | None = None) -> bool:
         """ Attempt to clone and return if clone succeeded """
         if parent_stack.check_skippable():
             return False
         clone_path = check_path_dupes(self.output_path(parent_stack))
-        if not self._real_filepaths:
+        source_paths = list(self._real_filepaths.values())
+        if source_path is not None:
+            source_paths.append(source_path)
+        if not source_paths:
             Printer.hashtaged(PrintChannel.WARNING, f'ATTEMPT TO CLONE {self.clsn.upper()} "{self}" FAILED\n' + 
                                                      'FILE NOT YET DOWNLOADED, THIS SHOULD NOT HAPPEN')
-        for filepath in self._real_filepaths.values():
+        for filepath in source_paths:
+            if isinstance(self, Track) and filepath.suffix.lower() != f'.{self._ext}': continue
             if not file_has_content(filepath): continue
             pathlike_move_safe(filepath, clone_path, copy=True)
             self.mark_downloaded(parent_stack, clone_path)
@@ -600,8 +606,18 @@ class Track(DLContent, HasArtists, HasGenres, IsAddable, IsFavoritable):
             update_repl(parent.id,          "{playlist_id}")
             update_repl(playlist_number,    "{playlist_number}", "{playlist_num}")
         
-        for replstr, md_val in repl_dict.items():
-            output_template = output_template.replace(replstr, self.fix_filename(md_val))
+        # Split the template, not the metadata: a slash in a title must never
+        # create another directory. Sanitize the assembled name just once so
+        # reserved-name matching agrees with the manager (e.g. CON - AUX).
+        components = []
+        for component in output_template.split('/'):
+            component = re.sub(r'\{[^{}]+\}',
+                               lambda match: str(repl_dict.get(match.group(), match.group())), component)
+            component = self.fix_filename(component)
+            if component in {'.', '..'}:
+                raise ValueError('Output component cannot be a dot directory')
+            components.append(component)
+        output_template = '/'.join(components)
         
         return Zotify.CONFIG.get_root_path() / f"{output_template}.{self._ext}"
     
@@ -698,6 +714,16 @@ class Track(DLContent, HasArtists, HasGenres, IsAddable, IsFavoritable):
             # isrc skipping -> change archive mid-Query -> invalid optimized_dl SKIPPABLE_CACHE
             # TODO get rid of SKIPPABLE_CACHE?
             return
+
+        # A previous session's global entry is a copy source, not permission
+        # to omit this playlist membership. Ignore sources of another format.
+        if (any(isinstance(p, Playlist) for p in parent_stack)
+                and (Zotify.CONFIG.get_skip_existing() or Zotify.CONFIG.get_skip_previously_downloaded())):
+            from zotify.metadata import SongArchive
+            source = SongArchive().obj_in_archive(self, required_suffix=f'.{self._ext}')
+            if source and self.clone_file(parent_stack, source):
+                if Zotify.CONFIG.get_optimized_dl(): self.clone_to_all()
+                return
         
         Interface.bind(parent_stack)
         with self.set_dl_status("Preparing Download"):
@@ -720,6 +746,10 @@ class Track(DLContent, HasArtists, HasGenres, IsAddable, IsFavoritable):
             self.create_download_directory(path.parent)
             time_elapsed_ffmpeg = self.convert_audio_format(temppath, path) # temppath -> path here
             if time_elapsed_ffmpeg is None:
+                if self._ext == "mp3":
+                    Printer.hashtaged(PrintChannel.ERROR, 'MP3 CONVERSION FAILED; TRACK NOT ARCHIVED\n' +
+                                                          f'SOURCE RETAINED AT: {temppath}')
+                    return
                 path = pathlike_move_safe(temppath, path.with_suffix(".ogg"))
             self.mark_downloaded(parent_stack, path)
         
@@ -764,7 +794,10 @@ class Episode(DLContent, IsAddable):
         self.show                   : Show      = None
     
     def fill_output_template(self, parent_stack: list[Container], output_template: str = "") -> PurePath:
-        return self._path_root / self.fix_filename(self.show.name) / (self.fix_filename(str(self)) + f".{self._ext}")
+        show_directory = self.fix_filename(self.show.name)
+        if show_directory in {'.', '..'}:
+            raise ValueError('Output component cannot be a dot directory')
+        return self._path_root / show_directory / (self.fix_filename(str(self)) + f".{self._ext}")
     
     def fetch_partner_url(self) -> str | None:
         resp = Zotify.invoke_url(PARTNER_URL + self.id + '"}&extensions=' + PERSISTED_QUERY, force_login5=True)
@@ -1324,7 +1357,9 @@ class Query(Container):
             for dlc, pss in dlc_mapping.items():
                 nonskipped = [ps for ps in pss if not ps.check_skippable()] # handles already downloaded
                 if not nonskipped: continue
-                downloadables.add(nonskipped.pop()) # prioritize parent album entry if present
+                downloadables.add(nonskipped[-1]) # prioritize parent album entry if present
+                # Include the selected destination: another stack may already
+                # have marked this track downloaded from an existing archive.
                 dlc._clone_to.update(nonskipped)
             
             downloadables = edge_zip(sorted(downloadables, key=lambda c: getattr(c[-1], DURATION_MS, 0)))

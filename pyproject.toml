@@ -23,7 +23,7 @@ classifiers = [
   "Operating System :: OS Independent"
 ]
 dependencies = [
-  "librespot @ git+https://github.com/Googolplexed0/librespot-python.git",
+  "librespot @ git+https://github.com/Googolplexed0/librespot-python.git@01abfc8ad012dbc40e90417e640faaf271ea2f98",
   "ffmpy",
   "music_tag",
   "Pillow",

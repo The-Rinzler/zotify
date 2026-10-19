@@ -1,5 +1,14 @@
 # Zotify
 
+> **Personal macOS / Music.app / iPod compatibility branch**
+>
+> Maintained in [The-Rinzler/zotify](https://github.com/The-Rinzler/zotify), branch
+> `compat/macos-ipod-v0.21.0`, using Googolplexed0's full v0.21.0 as the upstream base.
+> This work is not intended for publication to Googolplexed0's repository.
+> Start with [MIGRATION-v0.21.0.md](MIGRATION-v0.21.0.md) for isolated installation,
+> configuration-selected highest-compatible-quality MP3, preserved library contracts,
+> native macOS acceptance tests, and rollback. Do not replace the working setup before Mac acceptance.
+
 ## A highly customizable music and podcast downloader
 
 <p align="center">
@@ -28,11 +37,15 @@
 
 ## Installation And Updating
 
+The GitHub commands below require this compatibility branch to have been published
+to the personal repository. Until then, install the local checkout as described in
+the migration guide. No push is performed by these instructions.
+
 <details open><summary><strong>Install as Executable</strong></summary>
 
 *Useable across system from the command line*
 
-`pipx install git+https://github.com/Googolplexed0/zotify.git`
+`pipx install git+https://github.com/The-Rinzler/zotify.git@compat/macos-ipod-v0.21.0`
 
 </details>
 
@@ -40,7 +53,7 @@
 
 *Useable when launched as a Python module*
 
-`python -m pip install git+https://github.com/Googolplexed0/zotify.git`
+`python -m pip install git+https://github.com/The-Rinzler/zotify.git@compat/macos-ipod-v0.21.0`
 
 </details>
 
@@ -49,10 +62,10 @@
 *Update in accordance with your install method*
 
 **If Executable (pipx):**
-`pipx install -f git+https://github.com/Googolplexed0/zotify.git`
+`pipx install -f git+https://github.com/The-Rinzler/zotify.git@compat/macos-ipod-v0.21.0`
 
 **If Module:**
-`python -m pip install --force-reinstall git+https://github.com/Googolplexed0/zotify.git`
+`python -m pip install --force-reinstall git+https://github.com/The-Rinzler/zotify.git@compat/macos-ipod-v0.21.0`
 
 </details>
 

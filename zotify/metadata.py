@@ -545,6 +545,9 @@ class SongArchive:
     ITEM_PATH = "item_path"
     ISRC_CODE = "isrc_code"
     OPTIONAL_FIELDS = {ISRC_CODE}
+    # The manager treats the entire fifth field as the MP3 path. Keep ISRC
+    # in the upstream global archive, never as a sixth .song_ids column.
+    DIRECTORY_FIELDS = (ITEM_ID, DL_TIMESTAMP, AUTHOR_NAME, ITEM_NAME, ITEM_PATH)
     ARCHIVE_FORMAT = {
         ITEM_ID:        "",
         DL_TIMESTAMP:   "",
@@ -575,8 +578,12 @@ class SongArchive:
         return entry
     
     def _add_entries(self, mode: str, entries: list[dict[str, str | PurePath]]) -> None:
+        fields = self.ARCHIVE_FORMAT if self._global else self.DIRECTORY_FIELDS
+        def tsv_value(value):
+            return str(value).replace('\t', ' ').replace('\r', ' ').replace('\n', ' ')
         with open(self.path, mode, encoding='utf-8') as file:
-            file.writelines("\t".join(str(v) for v in entry.values()) + "\n" for entry in entries)
+            file.writelines("\t".join(tsv_value(entry.get(key, '')) for key in fields) + "\n" for entry in entries)
+        self.mode = 'a'
     
     def add_obj(self, obj: DLContent, item_path: PurePath) -> None:
         if self.disabled: return
@@ -592,7 +599,7 @@ class SongArchive:
     
     def _parse_entry_str(self, entry_str: str) -> dict[str, str | PurePath]:
         entry = self.ARCHIVE_FORMAT.copy()
-        entry.update(zip(self.ARCHIVE_FORMAT.keys(), entry_str.strip().split('\t')))
+        entry.update(zip(self.ARCHIVE_FORMAT.keys(), entry_str.rstrip('\r\n').split('\t')))
         if entry.get(self.ITEM_PATH): entry[self.ITEM_PATH] = PurePath(entry[self.ITEM_PATH])
         return entry
     
@@ -632,7 +639,7 @@ class SongArchive:
     
     def _get_all_of_type(self, archive_key: str) -> list[str]:
         archive_key_index = list(self.ARCHIVE_FORMAT.keys()).index(archive_key)
-        return [e.strip().split('\t')[archive_key_index] if e.count("\t") >= archive_key_index else ""
+        return [e.rstrip('\r\n').split('\t')[archive_key_index] if e.count("\t") >= archive_key_index else ""
                 for e in self._read_entry_strs()]
     def ids(self)           -> list[str]: return self._get_all_of_type(self.ITEM_ID)
     def isrcs(self)         -> list[str]: return self._get_all_of_type(self.ISRC_CODE)
@@ -642,15 +649,23 @@ class SongArchive:
             path_strs = [(p if PurePath(p).is_absolute() else str(self.path.parent / p)) if p else None for p in path_strs]
         return [PurePath(p) if p else None for p in path_strs]
     
-    def obj_in_archive(self, obj: DLContent) -> PurePath | None:
-        index = None
-        if obj.id in self.ids():
-            index = self.ids().index(obj.id);       log_str = f"ID: {obj.id}"
-        elif Zotify.CONFIG.get_skip_by_isrc() and isinstance(obj, Track) and obj.isrc and obj.isrc in self.isrcs():
-            index = self.isrcs().index(obj.isrc);   log_str = f"ISRC: {obj.isrc}"
-        if index is None: return None
-        Printer.logger(f'Found {obj.clsn} {log_str} in archive ("{self.path}") at line {index}')
-        return self.paths()[index]
+    def obj_in_archive(self, obj: DLContent, *, required_suffix: str | None = None) -> PurePath | None:
+        paths = self.paths()
+        ids = self.ids()
+        isrcs = self.isrcs() if Zotify.CONFIG.get_skip_by_isrc() and isinstance(obj, Track) and obj.isrc else []
+        for index, path in enumerate(paths):
+            if not path: continue
+            if required_suffix is not None and path.suffix.lower() != required_suffix.lower(): continue
+            if not file_has_content(path): continue
+            if ids[index] == obj.id:
+                log_str = f"ID: {obj.id}"
+            elif isrcs and isrcs[index] == obj.isrc:
+                log_str = f"ISRC: {obj.isrc}"
+            else:
+                continue
+            Printer.logger(f'Found {obj.clsn} {log_str} in archive ("{self.path}") at line {index}')
+            return path
+        return None
 
 
 class M3U8:

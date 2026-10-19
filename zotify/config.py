@@ -34,16 +34,16 @@ CONFIG_VALUES = {
     
     # File Options
     OUTPUT:                     { DEFAULT: '',                        TYPE: str,    ARG: ('--output'                               ,) },
-    OUTPUT_SINGLE:              { DEFAULT: '{artist}/{album}/{artist}_{song_name}',
+    OUTPUT_SINGLE:              { DEFAULT: '{artist} - {song_name}',
                                   TYPE: str,
                                   ARG: ('-os', '--output-single' ,) },
-    OUTPUT_ALBUM:               { DEFAULT: '{artist}/{album}/{album_num}_{artist}_{song_name}',
+    OUTPUT_ALBUM:               { DEFAULT: '{album}/{artist} - {song_name}',
                                   TYPE: str,
                                   ARG: ('-oa', '--output-album' ,) },
-    OUTPUT_PLAYLIST_EXT:        { DEFAULT: '{playlist}/{playlist_num}_{artist}_{song_name}',
+    OUTPUT_PLAYLIST_EXT:        { DEFAULT: '{playlist}/{artist} - {song_name}',
                                   TYPE: str,  
                                   ARG: ('-oe', '--output-ext-playlist' ,) },
-    OUTPUT_LIKED_SONGS:         { DEFAULT: 'Liked Songs/{artist}_{song_name}',
+    OUTPUT_LIKED_SONGS:         { DEFAULT: 'Liked Songs/{artist} - {song_name}',
                                   TYPE: str,
                                   ARG: ('-ol', '--output-liked-songs' ,) },
     SPLIT_ALBUM_DISCS:          { DEFAULT: 'False',                   TYPE: bool,   ARG: ('--split-album-discs'                       ,) },
@@ -69,7 +69,7 @@ CONFIG_VALUES = {
     REGEX_ALBUM_SKIP:           { DEFAULT: '',                        TYPE: str,    ARG: ('--regex-album-skip'                        ,) },
     
     # Encoding Options
-    DOWNLOAD_FORMAT:            { DEFAULT: 'copy',                    TYPE: str,    ARG: ('--codec', '--download-format'              ,) },
+    DOWNLOAD_FORMAT:            { DEFAULT: 'mp3',                     TYPE: str,    ARG: ('--codec', '--download-format'              ,) },
     DOWNLOAD_QUALITY:           { DEFAULT: 'auto',                    TYPE: str,    ARG: ('-q', '--download-quality'                  ,) },
     TRANSCODE_BITRATE:          { DEFAULT: 'auto',                    TYPE: str,    ARG: ('-b', '--bitrate', '--transcode-bitrate'    ,) },
     CUSTOM_FFMEPG_ARGS:         { DEFAULT: '',                        TYPE: str,    ARG: ('--custom-ffmpeg-args'                      ,) },
