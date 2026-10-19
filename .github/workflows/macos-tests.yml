@@ -1,0 +1,29 @@
+# All shell commands are static; no PR metadata or secret values are interpolated.
+name: macOS offline tests
+on:
+  pull_request:
+  push:
+    branches: [compat/macos-ipod-v0.21.0]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install audio prerequisites
+        run: brew install ffmpeg
+      - name: Create project venv and run offline tests
+        env:
+          PYTHON: python3
+        run: bash scripts/setup_macos.sh --test
+      - name: Verify installed package outside the checkout
+        run: |
+          cd "$HOME"
+          env -u PYTHONPATH -u PYTHONHOME "$GITHUB_WORKSPACE/.venv/bin/zotify" --version
+          env -u PYTHONPATH -u PYTHONHOME "$GITHUB_WORKSPACE/.venv/bin/python" -c 'import zotify.config; print(zotify.config.__file__)'

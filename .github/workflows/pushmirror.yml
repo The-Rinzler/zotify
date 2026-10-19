@@ -1,27 +1,11 @@
-name: Push mirror
-
+# Personal-fork safety: upstream mirroring is intentionally disabled.
+name: Upstream mirror disabled
 on:
-  pull_request:
-    types: [closed]
-
+  workflow_dispatch:
+permissions:
+  contents: read
 jobs:
-  push:
-    if: github.event.pull_request.merged == true
+  notice:
     runs-on: ubuntu-latest
-    steps: 
-      - uses: actions/checkout@v2
-
-      - name: setup git
-        run: |
-          git config user.name "GitHub Actions Bot"
-          git config user.email "<>"                    
-
-      - name: set upstream
-        run: |
-          git remote set-url origin https://x-access-token:${{ secrets.GITEA_TOKEN }}@zotify.xyz/zotify/zotify
-          git remote add old https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/zotify-dev/zotify
-
-      - name: push repo
-        run: |
-          git fetch --unshallow old
-          git push
+    steps:
+      - run: printf '%s\n' 'No mirror push is performed from this personal fork.'

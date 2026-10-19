@@ -160,3 +160,23 @@ Zotify\ Podcasts/
 
 # Testing
 debug.py
+
+# Private credentials, shell environments and account caches
+.env.*
+!.env.example
+api_credentials.json
+login5.json
+devapi.json
+.cache-spotipy*
+config_DEBUG.json
+
+# Local libraries and generated playlists / archives
+.song_ids
+.song_archive
+*.mp3
+*.ogg
+*.m4a
+*.m3u
+*.m3u8
+*.lrc
+._*
