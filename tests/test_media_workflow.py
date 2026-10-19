@@ -18,13 +18,40 @@ from zotify.const import (BULK_WAIT_TIME, DOWNLOAD_FORMAT, DOWNLOAD_QUALITY,
 from zotify.metadata import SongArchive
 
 
+@pytest.mark.parametrize(('listing', 'expected'), [
+    (' A....D libvorbis libvorbis encoder', ['-c:a', 'libvorbis']),
+    (' A..X.D vorbis Vorbis encoder',
+     ['-ac', '2', '-c:a', 'vorbis', '-strict', '-2']),
+])
+def test_vorbis_fixture_encoder_args_support_available_ffmpeg_encoders(listing, expected):
+    assert _vorbis_encoder_args(listing) == expected
+
+
+def _vorbis_encoder_args(encoder_listing):
+    """Choose a Vorbis encoder available in this FFmpeg build."""
+    names = {parts[1] for line in encoder_listing.splitlines()
+             if len(parts := line.split()) >= 2}
+    if 'libvorbis' in names:
+        return ['-c:a', 'libvorbis']
+    if 'vorbis' in names:
+        # FFmpeg's native encoder is experimental and supports stereo only.
+        return ['-ac', '2', '-c:a', 'vorbis', '-strict', '-2']
+    raise ValueError('FFmpeg has no supported Vorbis encoder')
+
+
 @pytest.fixture
 def synthetic_stream(tmp_path, monkeypatch):
     if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
         pytest.skip('FFmpeg and FFprobe are required for the real media smoke test')
+    encoders = subprocess.run(['ffmpeg', '-hide_banner', '-encoders'],
+                              check=True, capture_output=True, text=True).stdout
+    try:
+        encoder_args = _vorbis_encoder_args(encoders)
+    except ValueError as exc:
+        pytest.skip(str(exc))
     source = tmp_path / 'synthetic-tone.ogg'
     subprocess.run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi',
-                    '-i', 'sine=frequency=440:duration=0.15', '-c:a', 'libvorbis', str(source)],
+                    '-i', 'sine=frequency=440:duration=0.15', *encoder_args, str(source)],
                    check=True, capture_output=True)
     audio = source.read_bytes()
     calls = []

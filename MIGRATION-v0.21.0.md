@@ -40,7 +40,7 @@ All other upstream architecture, including the v0.21.0 Login5/DevAPI credential 
 
 ## Automated verification (Linux)
 
-Python >=3.10, FFmpeg and FFprobe are required. Run from this source tree after installing the package and pytest into an isolated venv:
+Python >=3.10, FFmpeg and FFprobe are required. The fixture selects `libvorbis` when available, otherwise FFmpeg's native `vorbis` encoder (with its experimental flag); MP3 tests require an MP3 encoder such as `libmp3lame`. Run from this source tree after installing the package and pytest into an isolated venv:
 
 ```sh
 env -u PYTHONPATH -u PYTHONHOME /path/to/venv/bin/python -m pytest tests -q
