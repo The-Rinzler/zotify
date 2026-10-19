@@ -60,8 +60,8 @@ Tests forbid socket connections. They generate a short synthetic sine tone, exer
 
 Your earlier output showed the **old** environment: `Zotify 0.15.3`, imported from `~/zotify-macos-test.I4NtRj/zotify`. Keep it intact. The new archive/source below is a separate install.
 
-1. Extract the provided `zotify-v0.21.0-macos-ipod.tar.gz` into your home directory. It contains a `zotify-v0.21.0-macos-ipod` folder. Do not overwrite an existing folder with that name.
-2. From outside the old checkout, use a new venv. Python 3.11 is a conservative choice. If FFmpeg/FFprobe are absent, install them first (e.g. `brew install ffmpeg`).
+1. Extract the provided `zotify-v0.21.0-macos-ipod.tar.gz` into a new temporary folder. It contains a `zotify-v0.21.0` source folder. Do not overwrite an existing source folder with that name.
+2. From outside the old checkout, use a new venv. Python 3.11 is a conservative choice. FFmpeg and FFprobe are external macOS executables (the venv does not contain them); an existing Homebrew FFmpeg is fine. The MP3 path needs an MP3 encoder such as `libmp3lame`. If FFmpeg/FFprobe are absent, install them first (e.g. `brew install ffmpeg`).
 
 ```sh
 cd "$HOME"
