@@ -1,96 +1,46 @@
-import datetime
-import os
 import re
-import time
+from datetime import datetime, timezone
+from fractions import Fraction
+from os.path import commonpath
 from pathlib import Path, PurePath
 from shutil import move, copyfile, copyfileobj
-from zotify.config import Zotify
-from zotify.const import EXT_MAP
-from zotify.termoutput import PrintChannel, Printer
+
+from zotify.termoutput import *
 
 
 # Path Utils
-def create_download_directory(dir_path: str | PurePath) -> None:
-    """ Create directory and add a hidden file with song ids """
-    Path(dir_path).mkdir(parents=True, exist_ok=True)
-    
-    # add hidden file with song ids
-    hidden_file_path = PurePath(dir_path).joinpath('.song_ids')
-    if Zotify.CONFIG.get_disable_directory_archives():
-        return
-    if not Path(hidden_file_path).is_file():
-        with open(hidden_file_path, 'w', encoding='utf-8') as f:
-            pass
+def ensure_is_file(path: Path, def_filename: str, touch: bool = True) -> Path:
+    if path.is_file():  pass
+    elif path.is_dir(): path = path / def_filename
+    elif path.suffix:   pass
+    else:               path = path / def_filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if touch: path.touch()
+    return path
 
 
-def fix_filename(name: str | PurePath | Path ) -> str:
-    """
-    Replace invalid characters on Linux/Windows/MacOS with underscores.
-    list from https://stackoverflow.com/a/31976060/819417
-    Trailing spaces & periods are ignored on Windows.
-    >>> fix_filename("  COM1  ")
-    '_ COM1 _'
-    >>> fix_filename("COM10")
-    'COM10'
-    >>> fix_filename("COM1,")
-    'COM1,'
-    >>> fix_filename("COM1.txt")
-    '_.txt'
-    >>> all('_' == fix_filename(chr(i)) for i in list(range(32)))
-    True
-    """
-    name = re.sub(
-        r'[\/#:|_<>\0-\x1f?!]|^(AUX|COM[1-9]|CON|LPT[1-9]|NUL|PRN)(?![^.])',
-        "_",
-        str(name),
-        flags=re.IGNORECASE
-    )
-
-    maxlen = Zotify.CONFIG.get_max_filename_length()
-    if maxlen and len(name) > maxlen:
-        name = name[:maxlen]
-
-    return name
-
-
-def fix_filepath(path: PurePath, rel_to: PurePath) -> PurePath:
-    """ Fix all parts of a filepath """
-    fixed_parts = [fix_filename(part) for part in path.relative_to(rel_to).parts]
-    
-    # maxlen = Zotify.CONFIG.get_max_filepath_length()
-    # fixed_parts.reverse()
-    # while len("/".join(fixed_parts)) > maxlen:
-    #     diff = len("/".join(fixed_parts)) - maxlen
-    #     trimmable = [p for p in fixed_parts if len(p) > 5]
-    #     name = trimmable[0][:max(5, len(trimmable[0]) - diff)]
-    #     fixed_parts[fixed_parts.index(trimmable[0])] = name
-    # fixed_parts.reverse()
-    
-    return rel_to.joinpath(*fixed_parts)
-
-
-def walk_directory_for_tracks(root_path: PurePath):
-    Path(root_path).mkdir(parents=True, exist_ok=True)
-    for dirpath, dirnames, filenames in os.walk(Path(root_path)):
-        for filename in filenames:
-            if filename.endswith(tuple(EXT_MAP.values())):
-                yield PurePath(dirpath) / filename
+def file_has_content(path: str | PurePath) -> None | bool:
+    "returns None if file does not exist, False if file is empty, and True if file has content"
+    path = Path(path)
+    if not path.is_file():          return None
+    elif not path.stat().st_size:   return False
+    else:                           return True
 
 
 def pathlike_move_safe(src: PurePath | bytes, dst: PurePath, copy: bool = False) -> PurePath:
     Path(dst.parent).mkdir(parents=True, exist_ok=True)
-    
-    if not isinstance(src, PurePath):
+    if isinstance(src, bytes):
         with Path(dst).open("wb") as file:
-            copyfileobj(src, file)
-        return dst
-    
-    if not copy:
-        # Path(oldpath).rename(newpath)
-        move(src, dst)
-    else:
-        copyfile(src, dst)
+                copyfileobj(src, file)
+    elif copy:  copyfile(src, dst)
+    else:       move(src, dst)
     return dst
+
+
+def try_rel_path(path: PurePath | None, start: PurePath) -> PurePath | None:
+    if not path: return None
+    try: return path.relative_to(start)
+    except ValueError: return path
 
 
 def check_path_dupes(path: PurePath) -> PurePath:
@@ -105,7 +55,14 @@ def get_common_dir(allpaths: set[PurePath]) -> PurePath:
     if len({p.name for p in allpaths}) == 1:
         # only one path or only multiples of one path
         return allpaths.pop().parent
-    return PurePath(os.path.commonpath(allpaths))
+    return PurePath(commonpath(allpaths))
+
+
+def walk_directory_for_tracks(root_path: PurePath):
+    Path(root_path).mkdir(parents=True, exist_ok=True)
+    for filepath in Path(root_path).rglob("*"):
+        if filepath.is_file() and filepath.suffix and filepath.suffix[1:] in EXT_MAP.values():
+            yield PurePath(filepath)
 
 
 # Input Processing Utils
@@ -119,11 +76,13 @@ def safe_typecast(d: dict, k: str, to_cast: type, except_channel: PrintChannel =
         if str(raw_val).lower() in {"0", "no", "false"}:
             return False
         return True
+    elif to_cast is float and isinstance(raw_val, str) and "/" in raw_val:
+        return Fraction(''.join(raw_val.split()))
     try:
         return to_cast(raw_val)
-    except Exception as e:
+    except Exception:
         Printer.hashtaged(except_channel, f'COULD NOT CAST VALUE OF KEY "{k}" TO TYPE {str(to_cast).upper()}')
-        raise e
+        raise
 
 
 def strlist_compressor(strs: list[str]) -> str:
@@ -133,33 +92,24 @@ def strlist_compressor(strs: list[str]) -> str:
     return " ".join(res)
 
 
-def bulk_regex_urls(urls: str | list[str]) -> list[list[str]]:
-    """ Since many kinds of search may be passed at the command line, process them all here. """
-    
-    if isinstance(urls, list):
-        urls = strlist_compressor(urls)
-    
-    base_uri = r'%s:([0-9a-zA-Z]{22})'
-    base_url = r'(?:https?://open\.sp'+ r'otify\.com/intl-\w+)?/?%s/([0-9a-zA-Z]{22})(?:\?si=.+?)?'
-    
-    matched_uris = []
-    from zotify.api import ITEM_FETCH
-    for req_type in ITEM_FETCH:
-        ids_by_type = re.findall(base_uri % req_type.type_attr, urls) +\
-                      re.findall(base_url % req_type.type_attr, urls)
-        matched_uris.append([f"{req_type.type_attr}:{s}" for s in ids_by_type])
-    return matched_uris
-
-
 def edge_zip(sorted_list: list) -> list:
-    # presorted small to big, in place, [1,2,3,4,5] -> [1,5,2,4,3],
+    """ Performs sort in place: [1,2,3,4,5] -> [1,5,2,4,3] (Assumes list is ascending) """
     n = len(sorted_list)
     sorted_list[::2], sorted_list[1::2] = sorted_list[:(n+1)//2], sorted_list[:(n+1)//2-1:-1]
     return sorted_list
 
 
+def arg_comb(*args: str):
+    return "&" + "&".join(args) if args else ""
+
+
 def clamp(low: int, i: int, high: int) -> int:
     return max(low, min(i, high))
+
+
+def pct_error(act: float | int, expct: float | int) -> float:
+    act = float(act); expct = float(expct)
+    return abs(act - expct) / expct
 
 
 def select(items: list, inline_prompt: str = 'ID(s): ', first_ID: int = 1, only_one: bool = False) -> list:
@@ -191,54 +141,8 @@ def select(items: list, inline_prompt: str = 'ID(s): ', first_ID: int = 1, only_
     return [items[i-first_ID] for i in (indices[:1] if only_one else indices) if i-first_ID >= 0]
 
 
-# Metadata & Codec Utils
-def unconv_artist_format(artists: list[str] | str) -> list[str]:
-    if Zotify.CONFIG.get_artist_delimiter() == "":
-        return artists
-    return artists.split(Zotify.CONFIG.get_artist_delimiter())
-
-
-def conv_artist_format(artists: list, FORCE_NO_LIST: bool = False) -> list[str] | str:
-    """ Returns converted artist format """
-    
-    from zotify.api import Artist
-    artists: list[Artist] | list[str] = artists
-    if not artists:
-        return ""
-    
-    artist_names = [a.name for a in artists] if isinstance(artists[0], Artist) else artists
-    if Zotify.CONFIG.get_artist_delimiter() == "":
-        # if len(artist_names) == 1:
-        #     return artist_names[0]
-        return ", ".join(artist_names) if FORCE_NO_LIST else artist_names
-    else:
-        return Zotify.CONFIG.get_artist_delimiter().join(artist_names)
-
-
-def conv_genre_format(genres: list[str]) -> list[str] | str:
-    """ Returns converted genre format """
-    
-    if not genres:
-        return ""
-    
-    if not Zotify.CONFIG.get_all_genres():
-        return genres[0]
-    
-    if Zotify.CONFIG.get_genre_delimiter() == "":
-        # if len(genres) == 1:
-        #     return genres[0]
-        return genres
-    else:
-        return Zotify.CONFIG.get_genre_delimiter().join(genres)
-
-
-def pct_error(act: float | int, expct: float | int) -> float:
-    act = float(act); expct = float(expct)
-    return abs(act - expct) / expct
-
-
 # Time Utils
-def fmt_duration(duration: float | int, unit_conv: tuple[int] = (60, 60), connectors: tuple[str] = (":", ":"), smallest_unit: str = "s", ALWAYS_ALL_UNITS: bool = False) -> str:
+def fmt_duration(duration: float | int, unit_conv: tuple[int, int] = (60, 60), connectors: tuple[str, str] = (":", ":"), smallest_unit: str = "s", ALWAYS_ALL_UNITS: bool = False) -> str:
     """ Formats a duration to a time string, defaulting to seconds -> hh:mm:ss format """
     duration_secs = int(duration // 1)
     duration_mins = duration_secs // unit_conv[1]
@@ -260,208 +164,19 @@ def fmt_duration(duration: float | int, unit_conv: tuple[int] = (60, 60), connec
         return f'{h}'.zfill(2) + connectors[0] + f'{m}'.zfill(2) + connectors[1] + f'{s}'.zfill(2)
 
 
-def strptime_utc(dtstr) -> datetime.datetime:
-    return datetime.datetime.strptime(dtstr[:-1], '%Y-%m-%dT%H:%M:%S').replace(tzinfo=datetime.timezone.utc)
+def dt_to_str(dt: datetime) -> str:
+    return dt.strftime(r'%Y-%m-%d %H:%M:%S')
 
 
-def wait_between_downloads(skip_wait: bool = False) -> None:
-    waittime = Zotify.CONFIG.get_bulk_wait_time()
-    if not waittime or waittime <= 0:
-        return
-    
-    if skip_wait:
-        time.sleep(min(0.5, waittime))
-        return
-    
-    if waittime > 5:
-        Printer.hashtaged(PrintChannel.DOWNLOADS, f'PAUSED: WAITING FOR {waittime} SECONDS BETWEEN DOWNLOADS')
-    time.sleep(waittime)
+def now() -> str:
+    return dt_to_str(datetime.now())
 
 
-# Song Archive Utils
-def upgrade_legacy_archive(entries: list[str], archive_path: PurePath) -> None:
-    """Attempt to match a legacy archive's filename to a full filepath"""
-
-    # Safety: Skip if file is corrupted (no tabs found)
-    if not entries or '\t' not in entries[0]:
-        Printer.logger("Archive file corrupted or empty. Skipping upgrade.", PrintChannel.DEBUG)
-        return
-
-    rewrite_legacy = False
-    from zotify.api import Track
-    upgraded_entries = []
-
-    for entry in entries:
-        entry_str = entry.strip()
-        if not entry_str:
-            continue
-
-        entry_items = entry_str.split('\t')
-
-        # Must have at least 5 fields: id, timestamp, artist, title, path
-        if len(entry_items) < 5:
-            upgraded_entries.append(entry_str)  # Keep unchanged
-            continue
-
-        filename_or_path = PurePath(entry_items[-1])
-
-        # Already absolute path, no upgrade needed
-        if filename_or_path.is_absolute():
-            upgraded_entries.append(entry_str)
-            continue
-
-        rewrite_legacy = True
-        path_entry = filename_or_path
-
-        # Try to find the file in the directory tree
-        try:
-            target_filename = filename_or_path.name
-            root_path = Path(Zotify.CONFIG.get_root_path())
-
-            for file_path in root_path.rglob('*'):
-                if not file_path.is_file():
-                    continue
-
-                if file_path.name == target_filename:
-                    try:
-                        # Verify by audio tags
-                        reliable_tags, unreliable_tags = Track.read_audio_tags(PurePath(file_path))
-
-                        if TRACKID in unreliable_tags and unreliable_tags[TRACKID] == entry_items[0]:
-                            path_entry = PurePath(file_path)
-                            break
-                        elif (unconv_artist_format(reliable_tags[0]) == entry_items[2] and
-                              reliable_tags[2] == entry_items[3]):
-                            path_entry = PurePath(file_path)
-                            break
-                    except:
-                        path_entry = PurePath(file_path)
-                        break
-        except Exception as e:
-            Printer.logger(
-                f"Warning: Could not upgrade legacy archive entry '{entry_items[-1]}': {str(e)}",
-                PrintChannel.DEBUG
-            )
-
-        # Reconstruct the entry string with proper tabs
-        upgraded_entry = f"{entry_items[0]}\t{entry_items[1]}\t{entry_items[2]}\t{entry_items[3]}\t{str(path_entry)}"
-        upgraded_entries.append(upgraded_entry)
-
-    if rewrite_legacy:
-        Path(archive_path).unlink()
-        with open(archive_path, 'w', encoding='utf-8') as f:
-            for entry_str in upgraded_entries:
-                f.write(entry_str + '\n')
-        Printer.logger(f"Upgraded archive: {archive_path}", PrintChannel.DEBUG)
+def timestamp_utc(timestamp_ms: str | None) -> str | None:
+    if not timestamp_ms: return None
+    dt = datetime.fromtimestamp(int(timestamp_ms) / 1000, tz=timezone.utc)
+    return dt_to_str(dt)
 
 
-def get_archived_entries(dir_path: PurePath | None = None) -> list[str]:
-    """ Returns list of downloaded song entries """
-    if dir_path:
-        disabled = Zotify.CONFIG.get_disable_directory_archives()
-        archive_path = dir_path / '.song_ids'
-    else:
-        disabled = Zotify.CONFIG.get_disable_song_archive()
-        archive_path = Zotify.CONFIG.get_song_archive_location()
-
-    if disabled or not Path(archive_path).exists():
-        return []
-
-    with open(archive_path, 'r', encoding='utf-8') as f:
-        # id, date, author, track, filepath (only filename if from legacy archive)
-        entries = f.readlines()
-
-    if dir_path or not Zotify.CONFIG.get_upgrade_legacy_archive():
-        return entries
-
-    upgrade_legacy_archive(entries, archive_path)
-    Zotify.CONFIG.set_stop_upgrade_legacy_archive()
-
-    return get_archived_entries(dir_path)
-
-
-def get_archived_item_ids(dir_path: PurePath | None = None) -> list[str]:
-    """ Returns list of downloaded item_ids """
-    entries = get_archived_entries(dir_path)
-    item_ids = [entry.strip().split('\t')[0] for entry in entries]
-    return item_ids
-
-
-def get_archived_item_paths(dir_path: PurePath | None = None) -> list[PurePath]:
-    """ Returns list of downloaded item_paths as just filenames for path comparison """
-    entries = get_archived_entries(dir_path)
-    # Extract just the filename from the stored path (works for legacy and full paths)
-    item_paths = [PurePath(entry.strip().split('\t')[-1]).name for entry in entries]
-    return item_paths
-
-
-def add_to_archive(item_id: str, timestamp: str, author_name: str, item_name: str, item_path: PurePath,
-                   archive_path: PurePath, mode: str) -> None:
-    """ Adds item record to the song archive at archive_path """
-
-    if not timestamp:
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with open(archive_path, mode, encoding='utf-8') as file:
-        file.write(f'{item_id}\t{timestamp}\t{author_name}\t{item_name}\t{item_path}\n')
-
-
-def add_obj_to_song_archive(obj, path: PurePath, dir_path: PurePath | None = None) -> None:
-    if dir_path:
-        disabled = Zotify.CONFIG.get_disable_directory_archives()
-        archive_path = dir_path / '.song_ids'
-        mode = 'a' # should already exist from create_download_directory(), so only append mode
-    else:
-        disabled = Zotify.CONFIG.get_disable_song_archive()
-        archive_path = Zotify.CONFIG.get_song_archive_location()
-        mode = 'a' if Path(archive_path).exists() else 'w'
-    
-    if disabled:
-        return
-    
-    from zotify.api import Track, Episode
-    obj: Track | Episode = obj
-    author_name = obj.artists[0].name if isinstance(obj, Track) else obj.show.publisher
-    item_name = obj.name if isinstance(obj, Track) else str(obj)
-    add_to_archive(obj.id, "", author_name, item_name, path,
-                   archive_path, mode)
-
-
-# Playlist File Utils
-def add_to_m3u8(m3u8_path: PurePath, contents: list, filepaths: list[PurePath], append_strs: list[str] = []):
-    from zotify.api import DLContent
-    contents: list[DLContent] = contents
-    
-    if not Path(m3u8_path).exists():
-        Path(m3u8_path.parent).mkdir(parents=True, exist_ok=True)
-        with open(m3u8_path, 'x', encoding='utf-8') as file:
-            file.write("#EXTM3U\n\n")
-    
-    with open(m3u8_path, 'a', encoding='utf-8') as file:
-        for content, track_path_m3u in zip(contents, filepaths):
-            if track_path_m3u is None:
-                continue
-            
-            track_label_m3u = f"#EXTINF:{content.duration_ms // 1000}, {content}\n"
-            if Zotify.CONFIG.get_m3u8_relative_paths():
-                track_path_m3u = os.path.relpath(track_path_m3u, m3u8_path.parent)
-            
-            file.write(track_label_m3u)
-            file.write(f"{track_path_m3u}\n\n")
-        
-        if append_strs:
-            file.writelines(append_strs)
-
-
-def fetch_m3u8_songs(m3u8_path: PurePath) -> list[str]:
-    """ Fetches the songs and associated file paths in an .m3u8 playlist"""
-    
-    if not Path(m3u8_path).exists():
-        return []
-    
-    with open(m3u8_path, 'r', encoding='utf-8') as file:
-        linesraw = file.readlines()[2:]
-        # group by song and filepath
-        # songsgrouped = []
-        # for i in range(len(linesraw)//3):
-        #     songsgrouped.append(linesraw[3*i:3*i+3])
-    return linesraw
+def strptime_utc(dtstr: str) -> datetime:
+    return datetime.strptime(dtstr[:-1], r'%Y-%m-%dT%H:%M:%S').replace(tzinfo=timezone.utc)

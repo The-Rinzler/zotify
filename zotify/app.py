@@ -1,19 +1,17 @@
 from argparse import Namespace, Action
-from pathlib import Path
 
-from zotify.config import Zotify
-from zotify.const import *
-from zotify.termoutput import Printer, PrintChannel
-from zotify.utils import bulk_regex_urls, clamp, select
+from zotify.api import *
 
 
-def filter_search_query(search_query: str, item_types: tuple[str]) -> dict[str, str]:
+def filter_search_query(search_query: str, item_types: tuple[str, ...]) -> dict[str, str | int]:
+    max_items = 1000
+    default_size = clamp(1, Zotify.CONFIG.get_search_query_size(), max_items)
     search_filters: dict[str, list[set | str]] = {
-        TYPE:               [{'/t',  '/type',},                  ','.join(item_types[:4])             ],
-        SEARCH_QUERY_SIZE:  [{'/l',  '/limit', '/s', '/size',},  Zotify.CONFIG.get_search_query_size()],
-        OFFSET:             [{'/o',  '/offset',},                "0"                                  ],
-        INCLUDE_EXTERNAL:   [{'/ie', '/include-external',},      "False"                              ],
-        'q':                [{},                                 search_query                         ],
+        TYPE:               [{'/t',  '/type',},                  ','.join(item_types[:4])   ],
+        SEARCH_QUERY_SIZE:  [{'/l',  '/limit', '/s', '/size',},  default_size               ],
+        OFFSET:             [{'/o',  '/offset',},                0                          ],
+        INCLUDE_EXTERNAL:   [{'/ie', '/include-external',},      "False"                    ],
+        'q':                [{},                                 search_query               ],
     }
     for k, v in search_filters.items():
         search_filters[k][0] = {" " + flag + " " for flag in v[0]}
@@ -42,12 +40,10 @@ def filter_search_query(search_query: str, item_types: tuple[str]) -> dict[str, 
                 break
     
     # type / value validation
-    max_offset = 1000
-    max_limit = 50
     for k, v in list(search_filters.items()):
-        if   k == TYPE:                fv = ",".join([t for t in v[-1].split() if t in item_types])
-        elif k == SEARCH_QUERY_SIZE:   fv = str(clamp(0, int(v[-1]), max_offset + max_limit))
-        elif k == OFFSET:              fv = str(clamp(0, int(v[-1]), max_offset            ))
+        if   k == TYPE:                fv = ",".join([t for t in v[-1].split(",") if t in item_types])
+        elif k == SEARCH_QUERY_SIZE:   fv = clamp(1, int(v[-1]), max_items)
+        elif k == OFFSET:              fv = clamp(0, int(v[-1]), max_items - 1)
         elif k == INCLUDE_EXTERNAL:    fv = "audio" if v[-1].lower() == "true" else ""
         else:                          fv = v[-1]
         if fv:     search_filters[k] = fv
@@ -58,7 +54,6 @@ def filter_search_query(search_query: str, item_types: tuple[str]) -> dict[str, 
 
 
 def fetch_search_display(search_query: str) -> list[str]:
-    # example search query: working in a coal mine /l 5 /type track album
     table_headers = {
         TRACKS:     ('ID', 'Name', 'Artists'    ),
         ALBUMS:     ('ID', 'Name', 'Artists'    ),
@@ -68,39 +63,40 @@ def fetch_search_display(search_query: str) -> list[str]:
         SHOWS:      ('ID', 'Name', 'Publisher'  ),
     }
     params = filter_search_query(search_query, tuple(t[:-1] for t in table_headers))
-    stop = int(params.pop(SEARCH_QUERY_SIZE))
-    url = f"{SEARCH_URL}?{MARKET_APPEND}"
-    items = Zotify.invoke_url_nextable(url, stop=stop, params=params,
-                                       stripper=tuple(t for t in table_headers if t[:-1] in params[TYPE]))
+    
+    search_url = f"{SEARCH_URL}?{MARKET_APPEND}"
+    params[LIMIT] = 50 if Zotify.CONFIG.permit_legacy_api() else 10
+    items: dict[str, list[dict]] = Zotify.invoke_url_nextable(search_url, stripper=tuple(t for t in table_headers if t[:-1] in params[TYPE]),
+                                                              max=params.pop(SEARCH_QUERY_SIZE), params=params)
     
     search_result_uris = []
     for item_type, headers in table_headers.items():
-        if item_type not in items or not len(items[item_type]): continue
+        if not any(items.get(item_type, [])): continue
         resps: list[dict] = [i for i in items[item_type] if i is not None]
         counter = len(search_result_uris) + 1
         if   item_type == TRACKS:
              data = [ [resps.index(t) + counter,
                        str(t[NAME]) + (" [E]" if t[EXPLICIT] else ""),
-                       ','.join([artist[NAME] for artist in t[ARTISTS]]) ] for t in resps]
+                       ', '.join([artist[NAME] for artist in t[ARTISTS]]) ] for t in resps]
         elif item_type == ALBUMS:
              data = [ [resps.index(m) + counter,
                        str(m[NAME]),
-                       ','.join([artist[NAME] for artist in m[ARTISTS]]) ] for m in resps]
+                       ', '.join([artist[NAME] for artist in m[ARTISTS]]) ] for m in resps]
         elif item_type == ARTISTS:
              data = [ [resps.index(a) + counter,
-                       str(a[NAME])                                      ] for a in resps]
+                       str(a[NAME])                                       ] for a in resps]
         elif item_type == PLAYLISTS:
              data = [ [resps.index(p) + counter,
                        str(p[NAME]),
-                       str(p[OWNER][DISPLAY_NAME])                       ] for p in resps]
+                       str(p[OWNER][DISPLAY_NAME])                        ] for p in resps]
         if   item_type == EPISODES:
              data = [ [resps.index(e) + counter,
                        str(e[NAME]) + (" [E]" if e[EXPLICIT] else ""),
-                       str(e[SHOW][NAME])                                ] for e in resps]
+                       str(e[SHOW][NAME])                                 ] for e in resps]
         elif item_type == SHOWS:
              data = [ [resps.index(s) + counter,
                        str(s[NAME]) + (" [E]" if s[EXPLICIT] else ""),
-                       str(s[PUBLISHER])                                 ] for s in resps]
+                       str(s[PUBLISHER])                                  ] for s in resps]
         search_result_uris.extend([i[URI] for i in resps])
         Printer.table(item_type.capitalize(), headers, data)
     
@@ -109,11 +105,10 @@ def fetch_search_display(search_query: str) -> list[str]:
 
 def search_and_select(search: str = ""):
     """ Perform search Queries and allow user to select results """
-    
     while not search or search == ' ':
         search = Printer.get_input('Enter search: ')
     
-    if any(bulk_regex_urls(search)):
+    if any(Query.bulk_regex_urls(search)):
         Printer.hashtaged(PrintChannel.WARNING, 'URL DETECTED IN SEARCH, TREATING SEARCH AS URL REQUEST')
         Query(Zotify.DATETIME_LAUNCH).request(search).execute()
         return
@@ -124,22 +119,19 @@ def search_and_select(search: str = ""):
         Printer.hashtaged(PrintChannel.MANDATORY, 'NO RESULTS FOUND - EXITING...')
         return
     
-    from zotify.api import Query
     uris: list[str] = select(search_result_uris)
     Query(Zotify.DATETIME_LAUNCH).request(' '.join(uris)).execute()
 
 
 def perform_query(args: Namespace) -> None:
     """ Perform Query according to type """
-    from zotify.api import Query, LikedSong, UserPlaylist, FollowedArtist, SavedAlbum, VerifyLibrary
-    
     try:
         if args.urls or args.file_of_urls:
             urls = ""
             if args.urls:
                 urls: str = args.urls
             elif args.file_of_urls:
-                if Path(args.file_of_urls).exists():
+                if file_has_content(args.file_of_urls):
                     with open(args.file_of_urls, 'r', encoding='utf-8') as file:
                         urls = " ".join([line.strip() for line in file.readlines()])
                 else:
@@ -148,8 +140,11 @@ def perform_query(args: Namespace) -> None:
             if len(urls) > 0:
                 Query(Zotify.DATETIME_LAUNCH).request(urls).execute()
         
-        elif Zotify.CONFIG.get_bypass_metadata():
-            Printer.hashtaged(PrintChannel.MANDATORY, 'METADATA BYPASS ENABLED - NON-URL MODES NON-FUNCTIONAL')
+        elif args.verify_library:
+            VerifyLibrary(Zotify.DATETIME_LAUNCH).execute()
+        
+        elif not Zotify.CONFIG.permit_client_api():
+            Printer.hashtaged(PrintChannel.MANDATORY, 'NO DEVELOPER CLIENT - SEARCH AND USERITEM QUERIES NON-FUNCTIONAL')
             return
         
         elif args.liked_songs:
@@ -164,9 +159,6 @@ def perform_query(args: Namespace) -> None:
         elif args.followed_albums:
             SavedAlbum(Zotify.DATETIME_LAUNCH).execute()
         
-        elif args.verify_library:
-            VerifyLibrary(Zotify.DATETIME_LAUNCH).execute()
-        
         elif args.search:
             search_and_select(args.search)
         
@@ -174,8 +166,12 @@ def perform_query(args: Namespace) -> None:
             search_and_select()
     
     except BaseException as e:
-        Zotify.cleanup()
-        raise e
+        # catch all but do not throw KeyboardInterrupts
+        if isinstance(e, KeyboardInterrupt):
+            Printer.hashtaged(PrintChannel.MANDATORY, "ABORTING QUERY")
+            return
+        Zotify.end()
+        raise
 
 
 def client(args: Namespace, modes: list[Action]) -> None:
@@ -184,15 +180,14 @@ def client(args: Namespace, modes: list[Action]) -> None:
     ask_mode = False
     if any([getattr(args, mode.dest) for mode in modes]):
         perform_query(args)
-    else:
-        if not args.persist:
-            # this maintains current behavior when no mode/url present
-            Printer.hashtaged(PrintChannel.MANDATORY, "NO MODE SELECTED, DEFAULTING TO SEARCH")
-            perform_query(args)
-            
-            # TODO: decide if this alt behavior should be implemented
-            # Printer.hashtaged(PrintChannel.MANDATORY, "NO MODE SELECTED, PLEASE SELECT ONE")
-            # ask_mode = True
+    elif not args.persist:
+        # this maintains current behavior when no mode/url present
+        Printer.hashtaged(PrintChannel.MANDATORY, "NO MODE SELECTED, DEFAULTING TO SEARCH")
+        perform_query(args)
+        
+        # TODO: decide if this alt behavior should be implemented
+        # Printer.hashtaged(PrintChannel.MANDATORY, "NO MODE SELECTED, PLEASE SELECT ONE")
+        # ask_mode = True
     
     while args.persist or ask_mode:
         ask_mode = False
@@ -221,7 +216,7 @@ def client(args: Namespace, modes: list[Action]) -> None:
         else:
             setattr(args, selected_mode.dest, True)
         
-        Zotify.start()
+        Zotify.start_stats()
         perform_query(args)
     
-    Zotify.cleanup()
+    Zotify.end()

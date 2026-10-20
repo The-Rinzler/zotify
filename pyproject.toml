@@ -7,6 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zotify"
+version = "0.21.0"
 description = "A highly customizable music and podcast downloader"
 authors = [
   { name = "Zotify Contributors" },
@@ -22,7 +23,7 @@ classifiers = [
   "Operating System :: OS Independent"
 ]
 dependencies = [
-  "librespot @ git+https://github.com/kokarare1212/librespot-python.git",
+  "librespot @ git+https://github.com/Googolplexed0/librespot-python.git@01abfc8ad012dbc40e90417e640faaf271ea2f98",
   "ffmpy",
   "music_tag",
   "Pillow",
@@ -32,10 +33,9 @@ dependencies = [
   "tabulate[widechars]",
   "tqdm"
 ]
-dynamic = ["version"]
-
-[tool.setuptools.dynamic]
-version = {attr = "zotify.__version__"}
 
 [project.scripts]
 zotify = "zotify.__main__:main"
+
+[tool.uv]
+config-settings = { editable_mode = "compat" }

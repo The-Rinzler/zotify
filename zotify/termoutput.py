@@ -1,17 +1,21 @@
 from __future__ import annotations
-import platform
+from contextlib import contextmanager
 from enum import Enum
+from functools import partial
 from itertools import cycle
 from mutagen import FileType
-from os import get_terminal_size, system
+from os import get_terminal_size
+from platform import system
 from pprint import pformat
 from re import split, escape
+from subprocess import run
 from tabulate import tabulate
 from threading import Thread
 from time import sleep
 from tqdm import tqdm
 from tqdm.auto import tqdm as tqdmauto
 from traceback import TracebackException
+from urllib3 import HTTPResponse
 
 from zotify.const import *
 
@@ -22,6 +26,7 @@ RIGHT_ONE_COL = "\033[C"
 LEFT_ONE_COL = "\033[D"
 START_OF_PREV_LINE = "\033[F"
 CLEAR_LINE = "\033[K"
+LOGIN_STRING = "Logging in..."
 
 
 class PrintChannel(Enum):
@@ -38,7 +43,7 @@ class PrintChannel(Enum):
     DOWNLOADS = PRINT_DOWNLOADS
 
 
-class PrintCategory(Enum):
+class PrintStyle(Enum):
     NONE = ""
     MANDATORY = "\n"
     LOADER = "\n\t"
@@ -49,10 +54,11 @@ class PrintCategory(Enum):
 
 
 class Printer:
-    LAST_PRINT: PrintCategory = PrintCategory.NONE
+    LAST_PRINT: PrintStyle = PrintStyle.NONE
     ACTIVE_LOADER: Loader | None = None
     ACTIVE_PBARS: list[tqdm] = []
     
+    # Helpers
     @staticmethod
     def _term_cols() -> int:
         try:
@@ -62,9 +68,66 @@ class Printer:
         return columns
     
     @staticmethod
-    def pretty(obj) -> str:
+    def _prefixes(msg: str, style: PrintStyle, channel: PrintChannel) -> tuple[str, PrintStyle]:
+        if style is PrintStyle.HASHTAG:
+            if channel in {PrintChannel.WARNING, PrintChannel.ERROR, PrintChannel.API_ERROR,
+                           PrintChannel.SKIPPING,}:
+                msg = channel.name + ":  " + msg
+            msg =  msg.replace("\n", "   ###\n###   ") + "   ###"
+            if channel is PrintChannel.DEBUG:
+                msg = style.value.replace("\n", "", 1) + msg
+                style = PrintStyle.DEBUG
+        elif style is PrintStyle.JSON:
+            msg = "#" * (Printer._term_cols()-1) + "\n" + msg + "\n" + "#" * Printer._term_cols()
+        
+        if Printer.LAST_PRINT is PrintStyle.DEBUG and style is PrintStyle.DEBUG:
+            pass
+        elif Printer.LAST_PRINT in {PrintStyle.LOADER, PrintStyle.LOADER_CYCLE} and style is PrintStyle.LOADER:
+            msg = "\n" + PrintStyle.LOADER_CYCLE.value + msg
+        elif Printer.LAST_PRINT in {PrintStyle.LOADER, PrintStyle.LOADER_CYCLE} and "LOADER" not in style.name:
+            msg = style.value.replace("\n", "", 1) + msg
+        else:
+            msg = style.value + msg
+        
+        return msg, style
+    
+    @staticmethod
+    def _obj_shrink(obj: list | tuple | dict) -> dict:
+        """ Shrinks API objects to remove data unnecessary data for debugging """
+        
+        def shrink(k: str) -> str:
+            if k in {AVAIL_MARKETS, IMAGES}:
+                return "LIST REMOVED FOR BREVITY"
+            elif k in {EXTERNAL_URLS, PREVIEW_URL}:
+                return "URL REMOVED FOR BREVITY"
+            elif k in {"_children"}:
+                return "SET REMOVED FOR BREVITY"
+            elif k in {"metadata_block_picture", "APIC:0", "covr"}:
+                return "BYTES REMOVED FOR BREVITY"
+            return None
+        
+        if isinstance(obj, list) and len(obj) > 0:
+            obj = [Printer._obj_shrink(item) for item in obj]
+        
+        elif isinstance(obj, tuple):
+            if len(obj) == 2 and isinstance(obj[0], str):
+                if shrink(obj[0]):
+                    obj = (obj[0], shrink(obj[0]))
+        
+        elif isinstance(obj, (dict, FileType)):
+            for k, v in obj.items():
+                if shrink(k):
+                    obj[k] = shrink(k)
+                else:
+                    obj[k] = Printer._obj_shrink(v)
+        
+        return obj
+    
+    # Primatives
+    @staticmethod
+    def pretty(obj, shrink: bool = False) -> str:
         if not isinstance(obj, str):
-            return pformat(obj, indent=2)
+            return pformat(Printer._obj_shrink(obj) if shrink else obj)
         
         if "http" in obj:
             delims = "/?&="
@@ -81,8 +144,8 @@ class Printer:
         return pretty_str
     
     @staticmethod
-    def logger(msg: str | dict, channel: PrintChannel | None = None) -> None:
-        if channel in {PrintChannel.LOADER}:
+    def logger(msg: str | dict | BaseException, channel: PrintChannel | None = None) -> None:
+        if channel in {PrintChannel.LOADER} or LOGIN_STRING in str(msg):
             return
         from zotify.config import Zotify
         if Zotify.LOGGER is None:
@@ -102,122 +165,64 @@ class Printer:
             else:
                 Zotify.LOGGER.info(msg)
     
-    @staticmethod
-    def _api_shrink(obj: list | tuple | dict) -> dict:
-        """ Shrinks API objects to remove data unnecessary data for debugging """
-        
-        def shrink(k: str) -> str:
-            if k in {AVAIL_MARKETS, IMAGES}:
-                return "LIST REMOVED FOR BREVITY"
-            elif k in {EXTERNAL_URLS, PREVIEW_URL}:
-                return "URL REMOVED FOR BREVITY"
-            elif k in {"_children"}:
-                return "SET REMOVED FOR BREVITY"
-            elif k in {"metadata_block_picture", "APIC:0", "covr"}:
-                return "BYTES REMOVED FOR BREVITY"
-            return None
-        
-        if isinstance(obj, list) and len(obj) > 0:
-            obj = [Printer._api_shrink(item) for item in obj]
-        
-        elif isinstance(obj, tuple):
-            if len(obj) == 2 and isinstance(obj[0], str):
-                if shrink(obj[0]):
-                    obj = (obj[0], shrink(obj[0]))
-        
-        elif isinstance(obj, (dict, FileType)):
-            for k, v in obj.items():
-                if shrink(k):
-                    obj[k] = shrink(k)
-                else:
-                    obj[k] = Printer._api_shrink(v) 
-        
-        return obj
+    @classmethod
+    @contextmanager
+    def pause_loader(cls, ignore_pause: bool = False):
+        if ignore_pause or not Printer.ACTIVE_LOADER or Printer.ACTIVE_LOADER.paused:
+            yield; return
+        Printer.ACTIVE_LOADER.pause()
+        try:     yield
+        finally: Printer.ACTIVE_LOADER.resume()
     
     @staticmethod
-    def _print_prefixes(msg: str, category: PrintCategory, channel: PrintChannel) -> tuple[str, PrintCategory]:
-        
-        if category is PrintCategory.HASHTAG:
-            if channel in {PrintChannel.WARNING, PrintChannel.ERROR, PrintChannel.API_ERROR,
-                           PrintChannel.SKIPPING,}:
-                msg = channel.name + ":  " + msg
-            msg =  msg.replace("\n", "   ###\n###   ") + "   ###"
-            if channel is PrintChannel.DEBUG:
-                msg = category.value.replace("\n", "", 1) + msg
-                category = PrintCategory.DEBUG
-        elif category is PrintCategory.JSON:
-            msg = "#" * (Printer._term_cols()-1) + "\n" + msg + "\n" + "#" * Printer._term_cols()
-        
-        if Printer.LAST_PRINT is PrintCategory.DEBUG and category is PrintCategory.DEBUG:
-            pass
-        elif Printer.LAST_PRINT in {PrintCategory.LOADER, PrintCategory.LOADER_CYCLE} and category is PrintCategory.LOADER:
-            msg = "\n" + PrintCategory.LOADER_CYCLE.value + msg
-        elif Printer.LAST_PRINT in {PrintCategory.LOADER, PrintCategory.LOADER_CYCLE} and "LOADER" not in category.name:
-            msg = category.value.replace("\n", "", 1) + msg
-        else:
-            msg = category.value + msg
-        
-        return msg, category
-    
-    @staticmethod
-    def _toggle_active_loader(skip_toggle: bool = False) -> None:
-        if not skip_toggle and Printer.ACTIVE_LOADER:
-            if Printer.ACTIVE_LOADER.paused:
-                Printer.ACTIVE_LOADER.resume()
-            else:
-                Printer.ACTIVE_LOADER.pause()
-    
-    @staticmethod
-    def new_print(channel: PrintChannel, msg: str, category: PrintCategory = PrintCategory.NONE, 
-                  skip_toggle: bool = False, end: str = "\n") -> None:
+    def new_print(channel: PrintChannel, msg: str, style: PrintStyle = PrintStyle.NONE, 
+                  end: str = "\n") -> None:
         Printer.logger(msg, channel)
         if channel != PrintChannel.MANDATORY:
             from zotify.config import Zotify
             if Zotify.CONFIG.get_standard_interface():
                 return
         if channel == PrintChannel.MANDATORY or Zotify.CONFIG.get(channel.value):
-            msg, category = Printer._print_prefixes(msg, category, channel)
-            Printer._toggle_active_loader(skip_toggle)
-            for line in str(msg).splitlines():
-                if end == "\n":
-                    tqdm.write(line.ljust(Printer._term_cols()))
-                else:
-                    tqdm.write(line, end=end)
-                Printer.LAST_PRINT = category
-            Printer._toggle_active_loader(skip_toggle)
+            msg, style = Printer._prefixes(msg, style, channel)
+            with Printer.pause_loader(style in {PrintStyle.LOADER, PrintStyle.LOADER_CYCLE}):
+                for line in str(msg).splitlines():
+                    if end == "\n":
+                        tqdm.write(line.ljust(Printer._term_cols()))
+                    else:
+                        tqdm.write(line, end=end)
+                    Printer.LAST_PRINT = style
     
     @staticmethod
     def get_input(prompt: str) -> str:
         user_input = ""
-        Printer._toggle_active_loader()
-        while len(user_input) == 0:
-            Printer.new_print(PrintChannel.MANDATORY, prompt, end="", skip_toggle=True)
-            user_input = str(input())
-        Printer._toggle_active_loader()
+        with Printer.pause_loader():
+            while len(user_input) == 0:
+                Printer.new_print(PrintChannel.MANDATORY, prompt, end="")
+                user_input = str(input())
         return user_input
     
     # Print Wrappers
     @staticmethod
-    def json_dump(obj: dict, channel: PrintChannel = PrintChannel.ERROR, category: PrintCategory = PrintCategory.JSON) -> None:
-        obj = Printer._api_shrink(obj)
-        Printer.new_print(channel, Printer.pretty(obj), category)
-    
-    @staticmethod
     def debug(*msg: tuple[str | object]) -> None:
-        for m in msg:
-            if isinstance(m, str):
-                Printer.new_print(PrintChannel.DEBUG, m, PrintCategory.DEBUG)
-            else:
-                Printer.json_dump(m, PrintChannel.DEBUG, PrintCategory.DEBUG)
+        with Printer.pause_loader():
+            for m in msg:
+                if isinstance(m, str):
+                    Printer.new_print(PrintChannel.DEBUG, m, PrintStyle.DEBUG)
+                else:
+                    Printer.new_print(PrintChannel.DEBUG, Printer.pretty(m), PrintStyle.DEBUG)
     
     @staticmethod
     def hashtaged(channel: PrintChannel, msg: str) -> None:
-        Printer.new_print(channel, msg, PrintCategory.HASHTAG)
+        Printer.new_print(channel, msg, PrintStyle.HASHTAG)
+    
+    @staticmethod
+    def json_dump(channel: PrintChannel, obj: dict) -> None:
+        Printer.new_print(channel, Printer.pretty(obj), PrintStyle.JSON)
     
     @staticmethod
     def traceback(e: Exception) -> None:
         msg = "".join(TracebackException.from_exception(e).format())
-        Printer.new_print(PrintChannel.ERROR, msg, PrintCategory.MANDATORY)
+        Printer.new_print(PrintChannel.ERROR, msg, PrintStyle.MANDATORY)
     
     @staticmethod
     def depreciated_warning(option_string: str, help_msg: str = None, CONFIG = True) -> None:
@@ -228,28 +233,15 @@ class Printer:
         )
     
     @staticmethod
-    def table(title: str, headers: tuple[str], tabular_data: list) -> None:
+    def table(title: str, headers: tuple[str, ...], tabular_data: list) -> None:
         Printer.hashtaged(PrintChannel.MANDATORY, title)
         Printer.new_print(PrintChannel.MANDATORY, tabulate(tabular_data, headers=headers, tablefmt='pretty'))
-    
-    @staticmethod
-    def dl_complete(dlcontent, path, time_elapsed_dl: str, time_elapsed_ffmpeg: str | None) -> None:
-        from zotify.api import DLContent
-        dlcontent: DLContent = dlcontent
-        Interface.update(time_elapsed_dl, time_elapsed_ffmpeg, dlcontent.name)
-        dlcontent.set_dl_status("Waiting Between Downloads")
-        Printer.hashtaged(PrintChannel.DOWNLOADS, f'DOWNLOADED: "{dlcontent.rel_path(path)}"\n' +
-                                                  f'DOWNLOAD TOOK {time_elapsed_dl}' +
-                                                  f' (PLUS {time_elapsed_ffmpeg} CONVERTING)' if time_elapsed_ffmpeg else '')
     
     # Prefabs
     @staticmethod
     def clear() -> None:
         """ Clear the console window """
-        if platform.system() == WINDOWS_SYSTEM:
-            system('cls')
-        else:
-            system('clear')
+        run(["cls" if system() == WINDOWS_SYSTEM else "clear"], shell=True)
     
     @staticmethod
     def splash() -> None:
@@ -261,7 +253,7 @@ class Printer:
         "     ███╔╝  ██║   ██║   ██║   ██║██╔══╝    ╚██╔╝  "+"\n"+
         "    ███████╗╚██████╔╝   ██║   ██║██║        ██║   "+"\n"+
         "    ╚══════╝ ╚═════╝    ╚═╝   ╚═╝╚═╝        ╚═╝   "+"\n",
-        PrintCategory.MANDATORY)
+        PrintStyle.MANDATORY)
     
     @staticmethod
     def user_make_select_prompt(only_one: bool = False) -> None:
@@ -271,7 +263,7 @@ class Printer:
               "> MAKE MULTIPLE SELECTIONS BY ADDING A COMMA BETWEEN IDs OR RANGES\n"
         Printer.new_print(PrintChannel.MANDATORY,
                           msg.splitlines()[0] if only_one else msg,
-                          PrintCategory.MANDATORY)
+                          PrintStyle.MANDATORY)
     
     @staticmethod
     def newline() -> None:
@@ -307,7 +299,8 @@ class Printer:
                 if not pbar_stack[-1].disable: Printer.ACTIVE_PBARS.pop()
     
     @staticmethod
-    def pbar_stream(stream, desc: str = "", total: int | None = None):
+    def pbar_stream(stream: HTTPResponse, total: int | None = None, desc: str = ""):
+        stream.read = partial(stream.read, decode_content=True)  # Decompress if needed
         return tqdmauto.wrapattr(stream, "read", total=total, desc=desc)
 
 
@@ -344,7 +337,7 @@ class Loader:
         self.end = end
         self.timeout = timeout
         self.channel = channel
-        self.category = PrintCategory.LOADER
+        self.style = PrintStyle.LOADER
         
         if mode == 'std1':
             self.steps = ["⢿", "⣻", "⣽", "⣾", "⣷", "⣯", "⣟", "⡿"]
@@ -371,9 +364,9 @@ class Loader:
         Printer.ACTIVE_LOADER = self._inherited_active_loader
     
     def loader_print(self, msg: str):
-        Printer.new_print(self.channel, msg, self.category, skip_toggle=True)
-        if self.category is PrintCategory.LOADER:
-            self.category = PrintCategory.LOADER_CYCLE
+        Printer.new_print(self.channel, msg, self.style)
+        if self.style is PrintStyle.LOADER:
+            self.style = PrintStyle.LOADER_CYCLE
     
     def animate(self):
         for c in cycle(self.steps):
@@ -398,10 +391,10 @@ class Loader:
             while not self.dead: #guarantee _animate has finished
                 try:
                     sleep(self.timeout)
-                except KeyboardInterrupt as e:
+                except KeyboardInterrupt:
                     self.stop() # guarantee stop is called so outer funcs can clean up all loaders
-                    raise e
-            self.category = PrintCategory.LOADER
+                    raise
+            self.style = PrintStyle.LOADER
             if self.end != "":
                 self.loader_print(self.end)
             self._release_active_loader()
@@ -410,18 +403,18 @@ class Loader:
         self.paused = True
     
     def resume(self):
-        self.category = PrintCategory.LOADER
+        self.style = PrintStyle.LOADER
         self.paused = False
         sleep(self.timeout*2) #guarantee _animate can print at least once
 
 
 class Interface:
-    ALL_CONTENT         : set           = None
-    CURRENT_BRANCH      : list          = None
-    LAST_DL_TIME        : int | None    = None
-    LAST_CONV_TIME      : int | None    = None
-    LAST_DL_ITEM_NAME   : str | None    = None
-    LAST_ERROR          : str | None    = None
+    ALL_DLCONTENT       : set  | None   = None
+    CURRENT_BRANCH      : list | None   = None
+    LAST_DL_TIME        : int  | None   = None
+    LAST_CONV_TIME      : int  | None   = None
+    LAST_DL_ITEM_NAME   : str  | None   = None
+    LAST_ERROR          : str  | None   = None
     
     @staticmethod
     def _term_lines() -> int:
@@ -432,45 +425,56 @@ class Interface:
         return lines
     
     @staticmethod
-    def parse_dbs(obj, attr: str) -> str:
+    def print_interface(msg) -> None:
+        for line in str(msg).splitlines():
+            tqdm.write(line.ljust(Printer._term_cols()))
+    
+    @staticmethod
+    def bind(parent_stack) -> None:
+        Interface.CURRENT_BRANCH = parent_stack
+    
+    @staticmethod
+    def parse_obj_db(obj, suppress_id: bool = False) -> str:
+        from zotify.api import Content, Album
+        obj: Content = obj
+        
+        db = ""
+        attrs = ([NAME,] if suppress_id else [ID, NAME]) + obj._to_db_attrs
+        for attr in attrs:
+            adds = Interface.parse_attr_db(obj, attr)
+            if isinstance(obj, Album):
+               adds = "\n".join([f"{obj.clsn} {line}" if obj.clsn not in line else line for line in adds.split("\n")])
+            db += adds
+            if attr != attrs[-1]: db += "\n"
+        return db
+    
+    @staticmethod
+    def parse_attr_db(obj, attr: str) -> str:
         from zotify.api import Content
         obj: Content = obj
         prefix = f"{obj.clsn} " if obj.type_attr not in attr else ""
         val: str | Content | list[str | Content] = getattr(obj, attr)
         
         if isinstance(val, Content):
-            return val.dashboard(suppress_id=True)
-        elif isinstance(val, list):
+            return Interface.parse_obj_db(val, suppress_id=True)
+        
+        base = f"{prefix}{attr.replace('_', ' ').title()} == "
+        if isinstance(val, list):
             if not val:
-                return prefix + attr.replace("_", " ").title() + " == " + "None"
+                return base + "None"
             elif isinstance(val[0], str):
-                return prefix + attr.replace("_", " ").title() + " == " + ", ".join(val)
+                return base + ", ".join(val)
             elif isinstance(val[0], Content):
-                dbs = [c.dashboard(suppress_id=True).split("\n") for c in val]
+                dbs = [Interface.parse_obj_db(c, suppress_id=True).split("\n") for c in val]
                 headers = [attr.split(" == ")[0] for attr in dbs[0]]
                 vals = [ [db[i].split(" == ")[-1] for db in dbs if db[i].split(" == ")[-1] != "None"]  for i in range(len(headers))]
                 vals = [v if v else ["None"] for v in vals]
                 combs = [h + " == " + ", ".join(v) for h, v in zip(headers, vals)]
                 return "\n".join(combs)
             else:
-                return prefix + attr.replace("_", " ").title() + " == " + "!UNEXPECTED ATTR!"
+                return base + "!UNEXPECTED ATTR!"
         else:
-            return prefix + attr.replace("_", " ").title() + " == " + val
-    
-    @staticmethod
-    def print_interface(msg) -> None:
-        for line in str(msg).splitlines():
-            tqdm.write(line.ljust(Printer._term_cols()))
-    
-    @staticmethod
-    def reset(all_nodes: dict) -> None:
-        from zotify.api import DLContent
-        Interface.ALL_CONTENT = {n for n in all_nodes if isinstance(n, DLContent)}
-        Interface.refresh()
-    
-    @staticmethod
-    def bind(parent_stack) -> None:
-        Interface.CURRENT_BRANCH = parent_stack
+            return base + str(val)
     
     @staticmethod
     def refresh() -> None:
@@ -479,27 +483,38 @@ class Interface:
             Printer.new_print(PrintChannel.MANDATORY, "\n"*(Interface._term_lines()))
             Printer.clear()
             return
+        elif Interface.ALL_DLCONTENT is None:
+            Printer.debug("Interface called before Query ALL_DLCONTENT initialization")
+            return
         
         from zotify.api import DLContent
         obj: DLContent = Interface.CURRENT_BRANCH[-1]
-        dl_prog = len({c for c in Interface.ALL_CONTENT if c.downloaded})
+        dl_prog = len({c for c in Interface.ALL_DLCONTENT if c._downloaded})
         dashboard = f"Query Tree: {Interface.CURRENT_BRANCH}\n" +\
                     f"\n" +\
                     f"Current DLContent: {obj.clsn}\n" +\
-                    f"{obj.dashboard()}\n" +\
+                    f"{Interface.parse_obj_db(obj)}\n" +\
                     f"\n" +\
-                    f"Status: {obj.dl_status}\n" +\
-                    f"Total Query Progress: {dl_prog}/{len(Interface.ALL_CONTENT)}\n" +\
+                    f"Status: {obj._dl_status}\n" +\
+                    f"Total Query Progress: {dl_prog}/{len(Interface.ALL_DLCONTENT)}\n" +\
                     f"\n" +\
                     f"Last Download Time: {Interface.LAST_DL_TIME}\n" +\
-                    f"Last Conversion Time: {Interface.LAST_CONVERTING_TIME}\n" +\
+                    f"Last Conversion Time: {Interface.LAST_CONV_TIME}\n" +\
                     f"Last Downloaded Item: {Interface.LAST_DL_ITEM_NAME}\n" +\
                     f"Last Encountered Error: {Interface.LAST_ERROR}\n"
         Printer.clear()
         Interface.print_interface(dashboard)
     
     @staticmethod
-    def update(time_elapsed_dl: str, time_elapsed_ffmpeg: str, item_name: str) -> None:
+    def dl_complete(dlcontent, path, time_elapsed_dl: str, time_elapsed_ffmpeg: str | None) -> None:
+        from zotify.api import DLContent
+        dlcontent: DLContent = dlcontent
+        
         Interface.LAST_DL_TIME = time_elapsed_dl
-        Interface.LAST_CONVERTING_TIME = time_elapsed_ffmpeg
-        Interface.LAST_DL_ITEM_NAME = item_name
+        Interface.LAST_CONV_TIME = time_elapsed_ffmpeg
+        Interface.LAST_DL_ITEM_NAME = dlcontent.name
+        
+        dlcontent.set_dl_status("Waiting Between Downloads")
+        Printer.hashtaged(PrintChannel.DOWNLOADS, f'DOWNLOADED: "{dlcontent.rel_path(path)}"\n' +
+                                                  f'DOWNLOAD TOOK {time_elapsed_dl}' +
+                                                  f' (PLUS {time_elapsed_ffmpeg} CONVERTING)' if time_elapsed_ffmpeg else '')
