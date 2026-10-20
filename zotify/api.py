@@ -257,7 +257,14 @@ class Content(HierarchicalNode):
                     recurs_children.extend(recurs_obj._main_items)
                 contains: tuple[type[Content], ...] = recurs_objs[0]._contains
                 for recurse_type in contains if isinstance(contains, tuple) else (contains,):
-                    recurse_uris = [item.uri for item in recurs_children if isinstance(item, recurse_type)]
+                    recurse_uris = [
+                        item.uri for item in recurs_children
+                        if isinstance(item, recurse_type)
+                        and not getattr(item, "is_local", False)
+                        and getattr(item, "is_playable", None) is not False
+                    ]
+                    if not recurse_uris:
+                        continue
                     recurs_item_resps = self.fetch_uris_metadata(recurse_uris, recurse_type, hide_loader=True)
                     _ = self.parse_uris_metadata(recurs_item_resps, recurse_type, hide_loader=True)
             return objs
@@ -1283,7 +1290,8 @@ class Query(Container):
         return self.requested_objs
     
     def conditional_metadata(self):
-        alltracks = {t for t in self.ALL_NODES if isinstance(t, Track) and not t.is_local}
+        alltracks = {t for t in self.ALL_NODES if isinstance(t, Track)
+                     and not t.is_local and t.is_playable is not False}
         
         artists: set[Artist] = set().union(*(set(track.artists) for track in alltracks if track.artists))
         artist_uris: dict[str, Artist] = {a.uri: a for a in artists if not a.is_local and not a._hasMetadata
@@ -1308,8 +1316,11 @@ class Query(Container):
                 if album._needs_expansion:
                     album.grab_more_children(hide_loader=True)
                 if album._needs_recursion:
-                    track_resps = self.fetch_uris_metadata([t.uri for t in album.tracks], Track, loader_text=loader_text)
-                    album.parse_uris_metadata(track_resps, Track, loader_text=loader_text)
+                    track_uris = [t.uri for t in (album.tracks or [])
+                                  if not t.is_local and t.is_playable is not False]
+                    if track_uris:
+                        track_resps = self.fetch_uris_metadata(track_uris, Track, loader_text=loader_text)
+                        album.parse_uris_metadata(track_resps, Track, loader_text=loader_text)
         
         if Zotify.CONFIG.get_export_zmd():
             from zotify.metadata import MetadataIO

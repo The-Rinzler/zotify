@@ -123,6 +123,48 @@ class LocalFileDetectionTests(unittest.TestCase):
                 query.conditional_metadata()
         metadata_request.assert_not_called()
 
+    def test_recursive_playlist_metadata_skips_local_and_unavailable_tracks(self):
+        query = api.Query("local-recursion-test")
+        playlist = api.Playlist("playlist:local-recursion-test")
+        playlist.name = "Local recursion test"
+        playlist._needs_recursion = True
+
+        local_track = api.Track(
+            "local:Jhen%C3%A9+Aiko:UNRELEASED+ALBUM:I%27m+Back+%28Unreleased%29:251"
+        )
+        local_track.is_playable = True
+        unavailable_track = api.Track("track:unavailable-recursion-test")
+        unavailable_track.is_playable = False
+        available_track = api.Track("track:available-recursion-test")
+        available_track.is_playable = True
+        playlist._main_items.extend([local_track, unavailable_track, available_track])
+
+        metadata_request = Mock(return_value=[])
+        with patch.object(query, "fetch_uris_metadata", side_effect=metadata_request):
+            query.parse_uris_metadata(
+                [{"uri": "spotify:playlist:local-recursion-test", "type": "playlist", "name": playlist.name}],
+                api.Playlist,
+            )
+
+        metadata_request.assert_called_once_with(
+            [available_track.uri], api.Track, hide_loader=True
+        )
+
+    def test_conditional_metadata_skips_unavailable_track_artists(self):
+        query = api.Query("unavailable-conditional-metadata-test")
+        track = api.Track("track:unavailable-conditional-test")
+        track.is_playable = False
+        artist = api.Artist("artist:unavailable-conditional-artist")
+        artist.name = "Unavailable Track Artist"
+        track.artists = [artist]
+
+        metadata_request = Mock(return_value=[])
+        with patch.object(query, "fetch_uris_metadata", side_effect=metadata_request):
+            with patch.object(api.Zotify.CONFIG, "get_save_genres", return_value=True):
+                query.conditional_metadata()
+
+        metadata_request.assert_not_called()
+
     def test_local_uri_skips_before_output_expansion(self):
         track = api.Track("local:Artist:Album:Song:180")
         self.assertTrue(track.is_local)
