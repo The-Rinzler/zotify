@@ -1,148 +1,67 @@
 # Zotify — macOS / Music.app / iPod edition
 
-Personal fork: [The-Rinzler/zotify](https://github.com/The-Rinzler/zotify).
-Based on **Googolplexed0 Zotify v0.21.0**, with a compatibility overlay for the
-[Zotify-MacOS-Music-Manager](https://github.com/The-Rinzler/Zotify-MacOS-Music-Manager).
-The Python package version remains `0.21.0`; use the Git commit to identify this fork.
+Personal macOS fork: [The-Rinzler/zotify](https://github.com/The-Rinzler/zotify), based on **Googolplexed0 Zotify v0.21.0** with a compatibility overlay for the [Zotify-MacOS-Music-Manager](https://github.com/The-Rinzler/Zotify-MacOS-Music-Manager). The Python package version remains `0.21.0`; use the Git commit to identify this fork.
 
-**macOS is the target.** This is not an Apple or Spotify product. Only download
-content you are authorized to download; account access, API availability and
-service terms can change. No account-safety or uninterrupted-service guarantee is made.
+**macOS is the target.** This is not an Apple or Spotify product. Use it only for content you are authorized to access and download. Account access, API availability, and service terms can change; uninterrupted service is not guaranteed.
 
 ## What this fork preserves
 
-- Configuration-selected MP3; `auto` requests the account's highest supported
-  source quality (upstream selection: Premium `320k`, otherwise `160k`).
-  Re-encoding does not improve the original lossy source.
-- Flat playlist folders and `First Artist - Title.mp3` names; additional artists
-  remain in metadata. A track in two playlists has a **physical copy in each**.
-- The existing macOS filename substitutions and five-column directory `.song_ids`.
-  The global `.song_archive` can contain the upstream sixth ISRC field.
-- Metadata, M3U8 playlists, lyrics, search, albums, artists, liked songs and podcasts
-  from upstream. The manager separately builds the Consolidated Library—it does
-  not require Zotify to move or delete playlist originals.
+- MP3 output selected by configuration; `auto` requests the highest source quality available to the account (upstream selection: Premium `320k`, otherwise `160k`). Re-encoding does not improve the original lossy source.
+- Flat playlist folders and `First Artist - Title.mp3` names; additional artists remain in metadata. A track in two playlists has a physical copy in each.
+- The existing macOS filename substitutions and five-column directory `.song_ids`. The global `.song_archive` can contain the upstream sixth ISRC field.
+- Upstream metadata, M3U8 playlists, lyrics, search, albums, artists, liked songs, and podcasts. The manager builds the Consolidated Library separately; it does not require Zotify to move or delete playlist originals.
 
-Start here:
-[macOS installation](INSTALLATION.md) · [Authentication and keys](docs/AUTHENTICATION.md) ·
-[Configuration reference](docs/CONFIGURATION.md) · [Changelog](CHANGELOG.md) ·
-[Migration and compatibility details](MIGRATION-v0.21.0.md)
+Start here: [macOS installation](INSTALLATION.md) · [Authentication and keys](docs/AUTHENTICATION.md) · [Configuration reference](docs/CONFIGURATION.md) · [Deployment and compatibility](MIGRATION-v0.21.0.md) · [Changelog](CHANGELOG.md)
 
-## Quick setup on macOS
+## Install on macOS
 
 Install [Homebrew](https://brew.sh/) if needed, then run in Terminal:
 
 ```zsh
 brew install python@3.11 ffmpeg git
-git clone --branch compat/macos-ipod-v0.21.0 https://github.com/The-Rinzler/zotify.git "$HOME/zotify"
+git clone --branch compat/macos-ipod https://github.com/The-Rinzler/zotify.git "$HOME/zotify"
 cd "$HOME/zotify"
-PYTHON="$(brew --prefix python@3.11)/bin/python3.11" bash scripts/setup_macos.sh --test
+PYTHON="$(brew --prefix python@3.11)/bin/python3.11" bash scripts/setup_macos.sh
 ```
 
-Use a **new clone directory** if `~/zotify` already exists. While reviewing an
-unmerged PR, check out that PR's branch before running setup: older default or
-compatibility branches may not yet contain these scripts.
+If `~/zotify` already exists, choose another empty directory; setup will not replace an existing `.venv`. If you choose a different location, use that same path in the alias and commands below. Python 3.11 is recommended (Python 3.10+ is required). Both `ffmpeg` and `ffprobe` must be on `PATH`; use an FFmpeg build with an MP3 encoder such as `libmp3lame`.
 
-The script creates only **this checkout's `.venv`**, installs this source (not
-PyPI's similarly named package), checks dependencies and the CLI, and optionally
-runs offline tests. It clears `PYTHONPATH`/`PYTHONHOME` while setting up. It never
-installs Homebrew, runs Spotify login, changes `.zshrc`, or overwrites another
-venv/config/music folder. Python 3.11 is recommended; the project requires 3.10+.
-Both `ffmpeg` and `ffprobe` must be on PATH. Use an FFmpeg build with an MP3 encoder
-such as `libmp3lame`.
+The script creates a project-local `.venv`, installs this checkout (not a similarly named PyPI package), checks dependencies and CLI startup, and does not install Homebrew, sign in to Spotify, edit `.zshrc`, or overwrite another environment/configuration/library. It clears inherited `PYTHONPATH` and `PYTHONHOME` during setup. `--update` is only for a venv created by this script in this exact checkout; it reinstalls the checked-out source and dependencies but does not pull Git changes or migrate credentials.
 
-If `.venv` already exists, setup stops. `bash scripts/setup_macos.sh --update --test`
-permits reuse **only when the venv was created by this script in this exact checkout**.
-It does not pull Git updates or upgrade production credentials. Dependencies are
-not fully locked; reinstalling later can select newer compatible PyPI versions.
+## Add a zsh alias
 
-### Add a `.zshrc` alias
-
-First inspect existing commands (`type -a zotify zotify_playlist`). Back up
-`~/.zshrc` before editing it; keep existing aliases/functions until acceptance tests
-pass. Add this line manually, adapting the checkout path if necessary:
+Use a distinct alias so an existing `zotify` command or playlist wrapper stays available. Back up `~/.zshrc`, add the following line manually, then reload and confirm it resolves to the new environment:
 
 ```zsh
-alias zotify='env -u PYTHONPATH -u PYTHONHOME "$HOME/zotify/.venv/bin/zotify"'
+alias zotify_mac='env -u PYTHONPATH -u PYTHONHOME "$HOME/zotify/.venv/bin/zotify"'
 ```
 
-Then `source ~/.zshrc`, followed by `type -a zotify` and `zotify --version`.
-If a function named `zotify` already exists, replace or rename it deliberately;
-adding an alias is not a migration of an old `zotify_playlist` wrapper. See
-[installation](INSTALLATION.md) for separate-manager aliases and rollback.
-
-## First run: authenticate in an isolated test root
-
-Zotify has **Login5 streaming credentials** and an optional, separate **Developer
-API OAuth identity**. A Client ID is not a Login5 token; the manager's Client
-Secret is not used here. Follow [Authentication](docs/AUTHENTICATION.md) first.
+Then reload and confirm it resolves to the new environment:
 
 ```zsh
-cd "$HOME/zotify"
-TEST="$(mktemp -d "$HOME/zotify-smoke.XXXXXX")"
-chmod 700 "$TEST"
-mkdir -p "$TEST/config"
-cp examples/config.macos-ipod.json "$TEST/config/config.json"
-# Preserve these explicit paths on EVERY test invocation.
-zotify_smoke() {
-  env -u PYTHONPATH -u PYTHONHOME "$HOME/zotify/.venv/bin/zotify" \
-    --config-location "$TEST/config" \
-    --credentials-location "$TEST/login5.json" \
-    --api-credentials-location "$TEST/devapi.json" \
-    --root-path "$TEST/music" --root-podcast-path "$TEST/podcasts" \
-    --song-archive-location "$TEST/.song_archive" "$@"
-}
-zotify_smoke --test 'PASTE_ONE_SMALL_PLAYLIST_URL'
+source ~/.zshrc
+type -a zotify_mac
+zotify_mac --version
 ```
 
-Replace the placeholder. `--test` avoids audio downloads but **still logs in and
-may write test configuration/caches and query Spotify**. A created credential
-file is not proof of a successful session. Do not delete production caches to fix
-a test failure. Stop on authentication errors or HTTP 429; see the auth guide.
-After a successful query, repeat without `--test` for a deliberate small download.
-Check the real codec/bitrate with FFprobe and overlapping playlist copies before
-cutover; the [migration checklist](MIGRATION-v0.21.0.md#mac-acceptance-isolated-config-credentials-and-library)
-has the acceptance procedure.
+If you choose to replace an existing `zotify` alias/function, inspect it first and keep a rollback path. Setup never edits your shell files.
 
-## Regular usage
+## First launch and regular use
 
-After deliberately selecting your production config and completing acceptance:
+Zotify creates its default configuration on first launch under `~/Library/Application Support/Zotify/` and saves credentials there after successful browser authorization. The default music and podcast destinations are `~/Music/Zotify Music` and `~/Music/Zotify Podcasts`; review or change these values in `config.json` before a larger download. See [Authentication](docs/AUTHENTICATION.md) for the browser sign-in flow and optional Developer API app.
+
+Start with one specific item you are authorized to download, then use the same command pattern for your intended content:
 
 ```zsh
-zotify --config-location '/absolute/path/to/config' 'https://open.spotify.com/playlist/PLAYLIST_ID'
-zotify --config-location '/absolute/path/to/config' --playlist
-zotify --config-location '/absolute/path/to/config' --liked
-zotify --help
+zotify_mac 'https://open.spotify.com/track/TRACK_ID'
+zotify_mac 'https://open.spotify.com/playlist/PLAYLIST_ID'
+zotify_mac --playlist
+zotify_mac --liked
+zotify_mac --help
 ```
 
-On macOS, omitting `--config-location` uses
-`~/Library/Application Support/Zotify/config.json`. Alternate config locations
-are **not sticky**: specify them every time. Existing config settings take
-precedence over fork defaults unless overridden on the CLI. Migrate deprecated
-`OUTPUT_PLAYLIST` to `OUTPUT_PLAYLIST_EXT`. Set `"EXPORT_M3U8": true` in JSON:
-upstream's export CLI flag is malformed, so this guide does not depend on it.
-Avoid `--verify-library` during a smoke test: it updates audio metadata.
-
-## Verification and release boundary
-
-```zsh
-cd "$HOME/zotify"
-env -u PYTHONPATH -u PYTHONHOME .venv/bin/python -m pytest tests -q
-```
-
-`setup_macos.sh --test` installs pytest. Tests forbid network access and use
-synthetic audio—not a Spotify stream. Two cross-repository tests are opt-in:
-install the manager's requirements into a disposable test environment, then set
-`ZOTIFY_MANAGER_SOURCE` to its checkout when running pytest. Do not treat their
-expected skips in the standalone environment as proof of manager integration.
-
-The new setup orchestration has disposable shell-harness tests; Linux preflight
-is supplemental. **Native macOS setup, browser authorization and a live download
-remain acceptance checks on the Mac**, not inferred from offline tests. No
-production environment, account cache or music library needs to be changed to
-review this release.
+Pass `--root-path` or `--root-podcast-path` if you need to select a destination for a command. On macOS, omitting `--config-location` uses `~/Library/Application Support/Zotify/config.json`; alternate config locations are not sticky, so specify them on every invocation. Existing config settings take precedence over fork defaults unless overridden on the CLI. Replace deprecated `OUTPUT_PLAYLIST` with `OUTPUT_PLAYLIST_EXT`. Enable M3U8 export in JSON with `"EXPORT_M3U8": true`; the inherited upstream export CLI flag is malformed. Avoid `--verify-library` unless you intend to update audio metadata.
 
 ## License and credits
 
-[Unlicense](LICENSE). Thanks to the original Zotify contributors, Googolplexed0,
-and librespot-python contributors. The streaming fork is pinned to commit
-`01abfc8ad012dbc40e90417e640faaf271ea2f98`; see `pyproject.toml`.
+[Unlicense](LICENSE). Thanks to the original Zotify contributors, Googolplexed0, and librespot-python contributors. The streaming fork is pinned to commit `01abfc8ad012dbc40e90417e640faaf271ea2f98`; see `pyproject.toml`.
