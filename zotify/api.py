@@ -184,6 +184,11 @@ class Content(HierarchicalNode):
                 setattr(self, ID, v)
             elif isinstance(self, Container) and k in self.__dict__ and getattr(self, k) == getattr(self, "_main_items"):
                 self._main_items.extend(v)
+            elif k == IS_LOCAL:
+                # A playlist wrapper can mark a Spotify-looking URI as local.
+                # Promote existing track metadata without demoting local URIs.
+                if v:
+                    self.is_local = True
             elif relative and k in {ADDED_AT, ADDED_BY, ALBUM_GROUP}:
                 relational_attr: dict[Container, str | bool | User] = getattr(self, k)
                 relational_attr.update({relative: v})
@@ -329,6 +334,10 @@ class DLContent(Content):
         Path(dir_path).joinpath('.song_ids').touch() # add hidden file with song ids
     
     def check_skippable(self, parent_stack: ParentStack) -> bool:
+        if self.is_local:
+            Printer.hashtaged(PrintChannel.SKIPPING, f'"{self.uri}" ({self.clsn.upper()} IS A LOCAL FILE)')
+            return True
+
         from zotify.metadata import SongArchive
         def handle_archive(archived_path: PurePath):
             Printer.hashtaged(PrintChannel.SKIPPING, f'"{self}" ({self.clsn.upper()} DOWNLOADED PREVIOUSLY)\n'
