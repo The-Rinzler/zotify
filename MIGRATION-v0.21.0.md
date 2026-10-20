@@ -1,11 +1,11 @@
 # Deployment and compatibility notes — Zotify v0.21.0
 
-This is the macOS compatibility fork based on the full **Googolplexed0/zotify v0.21.0** codebase, not the earlier 0.15.3 source with a changed version string. The personal repository is [The-Rinzler/zotify](https://github.com/The-Rinzler/zotify), and its deployment branch is `compat/macos-ipod`. Package metadata remains `0.21.0`; use the Git commit to distinguish fork revisions.
+This is the macOS compatibility fork based on the full **Googolplexed0/zotify v0.21.0** codebase, not the earlier 0.15.3 source with a changed version string. The personal repository is [The-Rinzler/zotify](https://github.com/The-Rinzler/zotify), and its deployment branch is `compat/macos-ipod-v0.21.0`. Package metadata remains `0.21.0`; use the Git commit to distinguish fork revisions.
 
 | Component | Source |
 | --- | --- |
 | Upstream base | `https://github.com/Googolplexed0/zotify`, tag `v0.21.0`, commit `e21821bb58521cb7590b73b7a2768de868afe8c0` |
-| Personal fork | `https://github.com/The-Rinzler/zotify`, branch `compat/macos-ipod` |
+| Personal fork | `https://github.com/The-Rinzler/zotify`, branch `compat/macos-ipod-v0.21.0` |
 | Streaming dependency | `https://github.com/Googolplexed0/librespot-python`, pinned commit `01abfc8ad012dbc40e90417e640faaf271ea2f98` |
 | Companion manager | [Zotify-MacOS-Music-Manager](https://github.com/The-Rinzler/Zotify-MacOS-Music-Manager) |
 
@@ -29,7 +29,7 @@ Use a new checkout and its own venv. Keep any previous checkout, venv, config, a
 
 ```zsh
 brew install python@3.11 ffmpeg git
-git clone --branch compat/macos-ipod https://github.com/The-Rinzler/zotify.git "$HOME/zotify"
+git clone --branch compat/macos-ipod-v0.21.0 https://github.com/The-Rinzler/zotify.git "$HOME/zotify"
 cd "$HOME/zotify"
 PYTHON="$(brew --prefix python@3.11)/bin/python3.11" bash scripts/setup_macos.sh
 "$HOME/zotify/.venv/bin/zotify" --version
@@ -48,7 +48,7 @@ For an existing checkout on the personal fork's deployment branch:
 ```zsh
 cd "$HOME/zotify"
 git fetch origin
-git pull --ff-only origin compat/macos-ipod
+git pull --ff-only origin compat/macos-ipod-v0.21.0
 PYTHON="$(brew --prefix python@3.11)/bin/python3.11" bash scripts/setup_macos.sh --update
 ```
 

@@ -19,7 +19,7 @@ Install [Homebrew](https://brew.sh/) if needed, then run in Terminal:
 
 ```zsh
 brew install python@3.11 ffmpeg git
-git clone --branch compat/macos-ipod https://github.com/The-Rinzler/zotify.git "$HOME/zotify"
+git clone --branch compat/macos-ipod-v0.21.0 https://github.com/The-Rinzler/zotify.git "$HOME/zotify"
 cd "$HOME/zotify"
 PYTHON="$(brew --prefix python@3.11)/bin/python3.11" bash scripts/setup_macos.sh
 ```

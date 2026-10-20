@@ -19,7 +19,7 @@ Python 3.11 is recommended (the project requires Python 3.10+). The MP3 workflow
 ## 2. Clone this fork and install it
 
 ```zsh
-git clone --branch compat/macos-ipod https://github.com/The-Rinzler/zotify.git "$HOME/zotify"
+git clone --branch compat/macos-ipod-v0.21.0 https://github.com/The-Rinzler/zotify.git "$HOME/zotify"
 cd "$HOME/zotify"
 PYTHON="$(brew --prefix python@3.11)/bin/python3.11" bash scripts/setup_macos.sh
 ```
@@ -71,7 +71,7 @@ Review the change and update the checkout deliberately. To update a venv previou
 ```zsh
 cd "$HOME/zotify"
 git fetch origin
-git pull --ff-only origin compat/macos-ipod
+git pull --ff-only origin compat/macos-ipod-v0.21.0
 PYTHON="$(brew --prefix python@3.11)/bin/python3.11" bash scripts/setup_macos.sh --update
 ```
 
