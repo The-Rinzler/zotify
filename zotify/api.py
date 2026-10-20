@@ -164,8 +164,13 @@ class Content(HierarchicalNode):
             resps = Zotify.invoke_libre_bulk_md(ContClass, uris)
         
         suffix = "..." if Zotify.CONFIG.permit_client_api() else " (unsafe)..."
-        with Loader(f"Fetching {loader_text} information{suffix}", disabled=hide_loader):
-            return [ContClass.fetch_metadata(uri) for uri in uris]
+        loader = Loader(f"Fetching {loader_text} information{suffix}", disabled=hide_loader)
+        with loader:
+            resps = []
+            for index, uri in enumerate(uris, 1):
+                loader.desc = f"Fetching {loader_text} information{suffix} [{index}/{len(uris)}] {uri}"
+                resps.append(ContClass.fetch_metadata(uri))
+            return resps
     
     def make_or_link_relative(self, relative_uri: str, RelativeClass: type[Content], make_parent: bool = False) -> Content | Container:
         relative_to_be = self.get_if_exists(relative_uri)
@@ -1315,7 +1320,10 @@ class Query(Container):
                 album.parse_metadata(None, album_resp)
                 if album._needs_expansion:
                     album.grab_more_children(hide_loader=True)
-                if album._needs_recursion:
+                # Disc/track totals come from the album's track listing. Fetching
+                # every listed track's full metadata is only needed when those
+                # parent-album tracks are also requested for download.
+                if album._needs_recursion and Zotify.CONFIG.get_download_parent_album():
                     track_uris = [t.uri for t in (album.tracks or [])
                                   if not t.is_local and t.is_playable is not False]
                     if track_uris:

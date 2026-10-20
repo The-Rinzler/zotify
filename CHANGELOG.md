@@ -16,6 +16,9 @@ Changes listed here describe the personal macOS compatibility fork, not an indep
 
 ### Fixed
 - Treat playlist entry `is_local` flags as authoritative for local detection and skip local tracks before metadata requests or output-path/archive checks.
+- Skip local and explicitly unavailable tracks in recursive and optional metadata requests.
+- Collect track/disc totals from album listings without fetching full metadata for every off-playlist album track. Full track expansion remains enabled when parent-album downloads are requested.
+- Derive missing track totals from complete album listings and show request position and URI during sequential metadata fetches instead of an indistinguishable spinner.
 
 ## v0.21.0 compatibility baseline
 

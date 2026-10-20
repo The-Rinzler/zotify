@@ -259,6 +259,8 @@ class MetadataIO:
             self._needs_expansion = not items or tracks.get(NEXT) is not None
             if not self._needs_expansion:
                 # set in Album.grab_more_children() later if album incomplete
+                if self.total_tracks is None:
+                    self.total_tracks = len(items)
                 self.total_discs = safe_typecast(items[-1], DISC_NUMBER, int)
                 self.duration_ms = sum(int(t.duration_ms) if t.duration_ms else 0 for t in self.tracks)
         
