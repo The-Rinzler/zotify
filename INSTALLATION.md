@@ -19,9 +19,9 @@ Python 3.11 is recommended (the project requires Python 3.10+). The MP3 workflow
 ## 2. Clone this fork and install it
 
 ```zsh
-git clone --branch compat/macos-ipod-v0.21.0 https://github.com/The-Rinzler/zotify.git "$HOME/zotify"
-cd "$HOME/zotify"
-PYTHON="$(brew --prefix python@3.11)/bin/python3.11" bash scripts/setup_macos.sh
+git clone --branch compat/macos-ipod-v0.21.0 https://github.com/The-Rinzler/zotify.git "$HOME/zotify" && \
+  cd "$HOME/zotify" && \
+  PYTHON="$(brew --prefix python@3.11)/bin/python3.11" bash scripts/setup_macos.sh --test
 ```
 
 If `~/zotify` exists, choose a different empty destination and adjust the paths below. `bash scripts/setup_macos.sh --help` lists the supported options.
@@ -31,12 +31,18 @@ The script resolves paths relative to its own checkout, clears `PYTHONPATH` and 
 To verify which installation will run:
 
 ```zsh
-"$HOME/zotify/.venv/bin/zotify" --version
-"$HOME/zotify/.venv/bin/python" -c \
+cd "$HOME"
+env -u PYTHONPATH -u PYTHONHOME "$HOME/zotify/.venv/bin/zotify" --version
+env -u PYTHONPATH -u PYTHONHOME "$HOME/zotify/.venv/bin/python" -c \
   'import sys, zotify.config; from importlib.metadata import version; print(sys.executable); print(zotify.config.__file__); print(version("zotify"))'
 ```
 
-Expect version `0.21.0` and a `zotify.config` path inside the new `.venv`. Using the explicit executable avoids an older checkout or environment shadowing this install. You do not need to activate the venv; for interactive work, use `source "$HOME/zotify/.venv/bin/activate"` and `deactivate` when finished.
+Run this check from outside the repository so Python doesn't import the source
+checkout from the current directory. Expect version `0.21.0` and a
+`zotify.config` path inside the new `.venv`. Using the explicit executable avoids
+an older checkout or environment shadowing this install. You do not need to
+activate the venv; for interactive work, use
+`source "$HOME/zotify/.venv/bin/activate"` and `deactivate` when finished.
 
 ## 3. Configure first use
 
@@ -69,12 +75,26 @@ The companion manager uses a separate repository and separate environment. Follo
 Review the change and update the checkout deliberately. To update a venv previously created by this script in this checkout:
 
 ```zsh
-cd "$HOME/zotify"
-git fetch origin
-git pull --ff-only origin compat/macos-ipod-v0.21.0
-PYTHON="$(brew --prefix python@3.11)/bin/python3.11" bash scripts/setup_macos.sh --update
+cd "$HOME/zotify" && \
+  git status --short --branch && \
+  git remote get-url origin
 ```
 
-`--update` only accepts a venv with this checkout's ownership marker. It reinstalls the checked-out source; it does not run Git commands, migrate configuration, or change credentials. If the environment is not recognized, stop and use a new empty clone rather than pointing setup at an existing production venv.
+Confirm that the remote is `https://github.com/The-Rinzler/zotify.git` and that
+the working tree is clean. If you have uncommitted changes, stop and preserve
+them before updating. Then run:
+
+```zsh
+git fetch origin && \
+  git switch compat/macos-ipod-v0.21.0 && \
+  git pull --ff-only origin compat/macos-ipod-v0.21.0 && \
+  PYTHON="$(brew --prefix python@3.11)/bin/python3.11" bash scripts/setup_macos.sh --update --test
+```
+
+`--update` only accepts a venv with this checkout's ownership marker. It
+reinstalls the checked-out source; it does not run Git commands, migrate
+configuration, or change credentials. If the environment is not recognized,
+stop and use a new empty clone rather than pointing setup at an existing
+production venv.
 
 For rollback, restore the previous executable or shell alias and configuration backup. Keep existing account files and music directories unless you deliberately manage them yourself; installing or updating Zotify does not require deleting either.

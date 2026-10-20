@@ -18,15 +18,48 @@ Start here: [macOS installation](INSTALLATION.md) · [Authentication and keys](d
 Install [Homebrew](https://brew.sh/) if needed, then run in Terminal:
 
 ```zsh
-brew install python@3.11 ffmpeg git
-git clone --branch compat/macos-ipod-v0.21.0 https://github.com/The-Rinzler/zotify.git "$HOME/zotify"
-cd "$HOME/zotify"
-PYTHON="$(brew --prefix python@3.11)/bin/python3.11" bash scripts/setup_macos.sh
+brew install python@3.11 ffmpeg git && \
+  git clone --branch compat/macos-ipod-v0.21.0 https://github.com/The-Rinzler/zotify.git "$HOME/zotify" && \
+  cd "$HOME/zotify" && \
+  PYTHON="$(brew --prefix python@3.11)/bin/python3.11" bash scripts/setup_macos.sh --test
 ```
 
-If `~/zotify` already exists, choose another empty directory; setup will not replace an existing `.venv`. If you choose a different location, use that same path in the alias and commands below. Python 3.11 is recommended (Python 3.10+ is required). Both `ffmpeg` and `ffprobe` must be on `PATH`; use an FFmpeg build with an MP3 encoder such as `libmp3lame`.
+If `~/zotify` already exists, don't clone over it; use the update procedure below
+or choose a different empty path. If `git clone` fails, stop instead of continuing
+with `cd` or setup commands. Python 3.11 is recommended (Python 3.10+ is
+required). Both `ffmpeg` and `ffprobe` must be on `PATH`; use an FFmpeg build with
+an MP3 encoder such as `libmp3lame`.
 
 The script creates a project-local `.venv`, installs this checkout (not a similarly named PyPI package), checks dependencies and CLI startup, and does not install Homebrew, sign in to Spotify, edit `.zshrc`, or overwrite another environment/configuration/library. It clears inherited `PYTHONPATH` and `PYTHONHOME` during setup. `--update` is only for a venv created by this script in this exact checkout; it reinstalls the checked-out source and dependencies but does not pull Git changes or migrate credentials.
+
+## Update an existing checkout
+
+First confirm this is the Zotify checkout, that `origin` is the expected fork,
+and that the working tree has no uncommitted changes. If it is dirty, stop and
+preserve those changes before updating:
+
+```zsh
+cd "$HOME/zotify" && \
+  git status --short --branch && \
+  git remote get-url origin
+```
+
+After confirming the remote is `https://github.com/The-Rinzler/zotify.git` and
+the checkout is clean, fast-forward the compatibility branch and refresh the
+venv:
+
+```zsh
+git fetch origin && \
+  git switch compat/macos-ipod-v0.21.0 && \
+  git pull --ff-only origin compat/macos-ipod-v0.21.0 && \
+  PYTHON="$(brew --prefix python@3.11)/bin/python3.11" bash scripts/setup_macos.sh --update --test
+```
+
+Git updates the source; `setup_macos.sh --update` reinstalls that source and its
+dependencies. It does not migrate config or credentials, change shell files, or
+touch downloaded music. If setup refuses the existing venv, don't remove its
+guard or point it at another environment; use a separate checkout and follow
+[INSTALLATION.md](INSTALLATION.md).
 
 ## Add a zsh alias
 
