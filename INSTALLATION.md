@@ -1,12 +1,10 @@
 # macOS installation and updates
 
-This guide installs **this fork's source** in a project-local `.venv`. Keep any
-existing Zotify venv, production checkout and aliases until the Mac acceptance
-tests in the [migration guide](MIGRATION-v0.21.0.md) pass.
+This guide installs this fork from source into its own project-local `.venv`. It leaves any existing Zotify environment, account files, shell aliases, and music library in place.
 
-## 1. Prerequisites
+## 1. Install prerequisites
 
-Install Homebrew using the instructions at <https://brew.sh/>, if needed. Then:
+Install [Homebrew](https://brew.sh/) if needed, then run:
 
 ```zsh
 brew install python@3.11 git ffmpeg
@@ -16,103 +14,67 @@ ffprobe -version
 ffmpeg -hide_banner -encoders 2>/dev/null | /usr/bin/grep libmp3lame
 ```
 
-The MP3 path needs a working MP3 encoder; the stock Homebrew FFmpeg is the
-recommended starting point. Python 3.11 is recommended (project minimum 3.10).
-Do not use `sudo pip`, system Python, or a venv belonging to the old release.
+Python 3.11 is recommended (the project requires Python 3.10+). The MP3 workflow needs an MP3 encoder; the stock Homebrew FFmpeg is the recommended starting point. Do not use `sudo pip`, system Python, or another project's venv.
 
-## 2. Clone the personal fork and create the venv
+## 2. Clone this fork and install it
 
 ```zsh
-git clone --branch compat/macos-ipod-v0.21.0 https://github.com/The-Rinzler/zotify.git "$HOME/zotify"
+git clone --branch compat/macos-ipod https://github.com/The-Rinzler/zotify.git "$HOME/zotify"
 cd "$HOME/zotify"
-PYTHON="$(brew --prefix python@3.11)/bin/python3.11" bash scripts/setup_macos.sh --test
+PYTHON="$(brew --prefix python@3.11)/bin/python3.11" bash scripts/setup_macos.sh
 ```
 
-If `~/zotify` exists, choose a different empty destination and adapt every path in
-this guide. For an unmerged review PR, check out its head branch first; the base
-branch may not contain setup yet. `bash scripts/setup_macos.sh --help` lists flags.
+If `~/zotify` exists, choose a different empty destination and adjust the paths below. `bash scripts/setup_macos.sh --help` lists the supported options.
 
-The script resolves paths relative to itself (paths with spaces work), clears
-`PYTHONPATH` and `PYTHONHOME`, refuses existing `.venv`s by default, installs this
-checkout, checks dependencies and CLI startup, and optionally runs offline tests.
-It does **not** log in, install Homebrew, edit shell files, or touch user data.
-Downloads/builds during pip installation need network access. The streaming
-library is pinned in `pyproject.toml`, but PyPI dependencies are not fully locked.
+The script resolves paths relative to its own checkout, clears `PYTHONPATH` and `PYTHONHOME`, refuses to replace an existing `.venv`, installs this checkout, verifies dependency consistency, and checks CLI startup. It does not log in, edit shell files, install Homebrew, or alter user data. PyPI dependencies are not fully locked, so later installs can select newer versions allowed by the project constraints.
 
-If setup fails after creating `.venv`, keep its error. Fix the prerequisite and
-rerun with `--update`; an interrupted venv creation before its marker was written
-is deliberately not recognized. Move only that newly created test `.venv` aside
-and retry, rather than pointing setup at an old production environment.
-
-## 3. Verify the installed package, not a shadowing old checkout
+To verify which installation will run:
 
 ```zsh
-cd "$HOME"
-env -u PYTHONPATH -u PYTHONHOME "$HOME/zotify/.venv/bin/zotify" --version
-env -u PYTHONPATH -u PYTHONHOME "$HOME/zotify/.venv/bin/python" -c \
+"$HOME/zotify/.venv/bin/zotify" --version
+"$HOME/zotify/.venv/bin/python" -c \
   'import sys, zotify.config; from importlib.metadata import version; print(sys.executable); print(zotify.config.__file__); print(version("zotify"))'
 ```
 
-Expect version `0.21.0` and a concrete `zotify.config` path in the **new `.venv`**.
-A namespace package can have no useful `zotify.__file__`. No activation is needed;
-explicit executable paths prevent accidentally using the old command. To activate
-for interactive work: `source "$HOME/zotify/.venv/bin/activate"`, then `deactivate`
-when finished. Activation alone does not clear global Python path overrides.
+Expect version `0.21.0` and a `zotify.config` path inside the new `.venv`. Using the explicit executable avoids an older checkout or environment shadowing this install. You do not need to activate the venv; for interactive work, use `source "$HOME/zotify/.venv/bin/activate"` and `deactivate` when finished.
 
-## 4. Aliases in `~/.zshrc`
+## 3. Configure first use
 
-Inspect `type -a zotify zotify_playlist` and save a backup of `~/.zshrc` before
-editing. Add this manually **after acceptance**, or use a temporary name first:
+The default `config.json` is created on first launch under `~/Library/Application Support/Zotify/`; credentials are saved there after successful authorization. The default destinations are `~/Music/Zotify Music` for music and `~/Music/Zotify Podcasts` for podcasts. Review the paths and output settings in that file before starting a large download. You can also pass `--root-path` and `--root-podcast-path` for a specific invocation.
 
-```zsh
-alias zotify='env -u PYTHONPATH -u PYTHONHOME "$HOME/zotify/.venv/bin/zotify"'
-```
+See [Authentication](docs/AUTHENTICATION.md) for the first browser sign-in and optional Developer API setup. Start with one intended track or other small item to complete first-run sign-in and confirm the chosen output directory; then run the playlist, album, or other job you want.
 
-Reload with `source ~/.zshrc`; check `type -a zotify` and `zotify --version`.
-Resolve any existing same-name functions/aliases deliberately. Existing playlist
-wrappers can embed old executable/config paths; they are not automatically updated.
-Never put credentials in an alias or use a password/token command-line argument.
+## 4. Add an alias to `~/.zshrc`
 
-The manager requires its **own** environment:
+Inspect `type -a zotify zotify_playlist` and back up `~/.zshrc`. Add a unique alias manually so existing commands and playlist wrappers remain usable:
 
 ```zsh
-git clone --branch release/macos-compat-setup https://github.com/The-Rinzler/Zotify-MacOS-Music-Manager.git "$HOME/Zotify-MacOS-Music-Manager"
-cd "$HOME/Zotify-MacOS-Music-Manager"
-# Check out its review PR branch if setup is not on main yet.
-PYTHON="$(brew --prefix python@3.11)/bin/python3.11" bash scripts/setup_macos.sh --test
+alias zotify_mac='env -u PYTHONPATH -u PYTHONHOME "$HOME/zotify/.venv/bin/zotify"'
 ```
 
-Its [README](https://github.com/The-Rinzler/Zotify-MacOS-Music-Manager#readme)
-contains separate playlist/consolidation aliases, the developer Client ID/Secret
-setup, and destructive-action warnings. Do not combine the two dependency sets
-in a production venv just to run optional integration tests.
+Reload and verify:
 
-## 5. Authenticate, smoke-test, then cut over
+```zsh
+source ~/.zshrc
+type -a zotify_mac
+zotify_mac --version
+```
 
-Use [Authentication](docs/AUTHENTICATION.md) and the README's explicit isolated
-paths for **each** invocation. Keep both credential files and test music outside
-the checkout. Check one small playlist, then another with an overlapping track.
-Confirm MP3 codec/bitrate, five-column `.song_ids`, working M3U8s and unchanged
-playlist originals before running manager operations on a copy of the test tree.
+If you intend to replace a same-name alias or function, review its current definition and keep a rollback copy before changing it. Never place credentials in shell aliases or command-line arguments.
 
-No native macOS/live-auth success is implied by Linux offline tests. Copying a
-credential file or seeing a browser success page is not acceptance. Only switch
-production paths/aliases after the end-to-end checks succeed.
+The companion manager uses a separate repository and separate environment. Follow its [installation guide](https://github.com/The-Rinzler/Zotify-MacOS-Music-Manager/blob/main/INSTALLATION.md); do not combine the two dependency sets in one venv.
 
 ## Updates and rollback
 
-Review a new commit/PR before updating your checkout. After a deliberate Git
-update, rerun:
+Review the change and update the checkout deliberately. To update a venv previously created by this script in this checkout:
 
 ```zsh
 cd "$HOME/zotify"
-PYTHON="$(brew --prefix python@3.11)/bin/python3.11" bash scripts/setup_macos.sh --update --test
+git fetch origin
+git pull --ff-only origin compat/macos-ipod
+PYTHON="$(brew --prefix python@3.11)/bin/python3.11" bash scripts/setup_macos.sh --update
 ```
 
-`--update` only recognizes a venv created by this script in this checkout. It
-reinstalls the checked-out code; it does not run `git pull`, migrate config, or
-change credentials. Stop if pip reports an error; do not proceed on a partial
-installation. A fresh checkout/venv is safer when testing a major dependency
-change. Roll back by restoring the previous alias/executable and config backup,
-not by deleting working credentials or music. To remove test artifacts, remove
-only the explicitly created test directory and new test venv once no longer used.
+`--update` only accepts a venv with this checkout's ownership marker. It reinstalls the checked-out source; it does not run Git commands, migrate configuration, or change credentials. If the environment is not recognized, stop and use a new empty clone rather than pointing setup at an existing production venv.
+
+For rollback, restore the previous executable or shell alias and configuration backup. Keep existing account files and music directories unless you deliberately manage them yourself; installing or updating Zotify does not require deleting either.
