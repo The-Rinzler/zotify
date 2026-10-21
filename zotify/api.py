@@ -6,6 +6,7 @@ from time import time, sleep
 from uuid import uuid4
 
 from zotify.config import Zotify, Streamer
+from zotify.path_collision import request_suffixed_download_approval
 from zotify.utils import *
 
 
@@ -393,6 +394,15 @@ class DLContent(Content):
         elif not self.is_playable:
             Printer.hashtaged(PrintChannel.SKIPPING, f'"{self}" ({self.clsn.upper()} IS UNAVAILABLE)')
             return True
+        elif (isinstance(self, Track) and path_exists
+              and Zotify.CONFIG.get_skip_existing()
+              and not Zotify.CONFIG.get_no_dir_archives()
+              and not in_dir_archive):
+            if not request_suffixed_download_approval(str(path), self.id, str(self)):
+                Printer.hashtaged(PrintChannel.SKIPPING,
+                                  f'"{self}" (EXISTING PATH NOT IN DIRECTORY ARCHIVE; '
+                                  f'NUMBERED COPY NOT APPROVED)\nFILE: "{self.rel_path(path)}"')
+                return True
         
         return False
     
