@@ -1,6 +1,11 @@
 from pathlib import Path
+from unittest.mock import Mock
 
+import pytest
 
+from zotify.config import Config
+from zotify.const import (DISABLE_DIRECTORY_ARCHIVES, OPTIMIZED_DOWNLOADING,
+                          SKIP_EXISTING, SKIP_PREVIOUSLY_DOWNLOADED)
 from zotify.metadata import SongArchive
 
 
@@ -85,6 +90,52 @@ def test_existing_archived_file_skips_download(track_graph):
     SongArchive(path.parent).add_obj(track, path)
     assert track.check_skippable(stack)
     assert track._real_filepaths[stack] == path
+
+
+@pytest.mark.parametrize('optimized', [False, True])
+@pytest.mark.parametrize('artist,title,track_id,filename', [
+    ('will.i.am', '#thatPOWER', '01TuObJVd7owWchVRuQbQw',
+     'will.i.am - _thatPOWER.mp3'),
+    ('David Guetta', "Who's That Chick? (feat. Rihanna)", '6qUSs4FDzZUdAhY6JDIJfa',
+     "David Guetta - Who's That Chick_ (feat. Rihanna).mp3"),
+    ('Kesha', 'Blah Blah Blah (feat. 3OH!3)', '7lWUJpax919G4JdaFEVmCy',
+     'Kesha - Blah Blah Blah (feat. 3OH_3).mp3'),
+])
+def test_manager_repaired_archive_reuses_punctuation_track_without_prompt(
+        track_graph, manager_modules, monkeypatch, optimized,
+        artist, title, track_id, filename):
+    _, manager_archive, _ = manager_modules
+    Config.Values.update({OPTIMIZED_DOWNLOADING: optimized,
+                          SKIP_EXISTING: True,
+                          DISABLE_DIRECTORY_ARCHIVES: False,
+                          SKIP_PREVIOUSLY_DOWNLOADED: False})
+    track, stack = track_graph(artist=artist, title=title, track_id=track_id,
+                               playlist='girl music (música gay)')
+    path = Path(track.output_path(stack))
+    assert path.name == filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    original = b'existing audio fixture; do not download or overwrite'
+    path.write_bytes(original)
+    assert SongArchive(path.parent).obj_in_archive(track) is None
+
+    entries = [{'id': track_id, 'artist': artist, 'title': title}]
+    assert manager_archive.reconcile_song_ids_flip_ids(str(path.parent), entries) == (1, 0, 0)
+    assert SongArchive(path.parent).obj_in_archive(track) == path
+    prompt = Mock(side_effect=AssertionError('A recognized track must not prompt'))
+    stream = Mock(side_effect=AssertionError('An existing track must not fetch audio'))
+    monkeypatch.setattr('zotify.api.request_suffixed_download_approval', prompt)
+    monkeypatch.setattr(track, 'fetch_stream', stream)
+
+    track.download(stack)
+    assert track._real_filepaths[stack] == path
+    assert path.read_bytes() == original
+    assert set(path.parent.glob('*.mp3')) == {path}
+    prompt.assert_not_called()
+    stream.assert_not_called()
+    assert manager_archive.reconcile_song_ids_flip_ids(str(path.parent), entries) == (0, 0, 0)
+    track.download(stack)
+    prompt.assert_not_called()
+    stream.assert_not_called()
 
 
 def test_archive_reads_legacy_five_and_upstream_six_fields(tmp_path):
